@@ -3,8 +3,8 @@
 # Tier 3 jobs open issues instead of failing builds: drift is not the
 # committer's fault, and a red build that blames the wrong person trains
 # everyone to ignore red. This file holds item 1 of the seven, the
-# determinism drift sentinel (#72), and item 5, the benchmark regression
-# judge (#151). The other five are tracked in #7.
+# determinism drift sentinel (#72), item 5, the benchmark regression
+# judge (#151), and the keyless live e2e (#168). The rest is tracked in #7.
 #
 # The sentinel refolds every log in corpus/ with today's main, through
 # `tau replay --expect` (#91), and expects the state hash each was pinned at. A hash that moved means the reducer
@@ -30,8 +30,18 @@
 # benchmark, deduplicated by open title. The job goes red only when it could
 # not have judged: valgrind or the runner missing, too few benchmarks, a
 # benchmark the baseline does not know. The same two landmines apply: the
-# firings counter above covers the whole workflow, both jobs fire together;
+# firings counter above covers the whole workflow, all jobs fire together;
 # scripts/bench-regression.sh fails closed below a benchmark-count floor.
+#
+# The keyless live e2e runs `ollama_live` from drivers/tests/e2e_live.rs,
+# the tool-loop programs against a real Ollama on the runner over the
+# OpenAI-compatible wire: no key, no spend. It is not a provider canary; a
+# local model's API does not move (CONTRIBUTING.md, "Provider drift is
+# caught by hand"). What it guards is our own driver and tool loop against a
+# real server, and the Ollama version pinned here. A failing row files an
+# issue naming the row; the job goes red only when it could not have run
+# the rows: the install, the pull, the build, or a pass that ran fewer rows
+# than ROWS_FLOOR (an empty lane must not read green).
 
 name: tier3
 
@@ -66,6 +76,7 @@ env:
   CORPUS_FLOOR: 10
   KPI_FLOOR: 3
   LIMIT_PCT: 5
+  ROWS_FLOOR: 3
 
 jobs:
   sentinel:
@@ -319,3 +330,159 @@ jobs:
             url="$(gh issue create --title "$title" --label status:ready --body "$body")"
             echo "$title: opened $url"
           done < regressions.tsv
+
+  # The keyless live e2e (#168): `just live e2e ollama`, on a runner. The
+  # release tarball is pinned by version and by the sha256 the release
+  # publishes next to it (sha256sum.txt), the same discipline as the action
+  # SHAs above; the GPU backends (about 2 GB of CUDA and Vulkan) are not
+  # extracted on a CPU runner.
+  ollama:
+    name: live e2e (ollama, keyless)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write       # to file a drift issue per failing row
+    env:
+      OLLAMA_VERSION: v0.34.4
+      OLLAMA_SHA256: c238986e61d40c0cc5f4a9b9e40b9eea104350b77efa34741fc134e105cb9533
+      OLLAMA_MODEL: qwen3:1.7b
+      OLLAMA_HOST: 127.0.0.1:11434
+      # The rows `common_rows` in drivers/tests/e2e_live.rs runs, in order,
+      # so a failure can be named by the row that did not print its line.
+      ROWS: tool_result_round_trip parallel_tool_calls_round_trip budget_refusal
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Install Ollama (pinned release, checksum from its sha256sum.txt)
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          url="https://github.com/ollama/ollama/releases/download/$OLLAMA_VERSION/ollama-linux-amd64.tar.zst"
+          curl -fsSL --retry 3 -o ollama.tar.zst "$url"
+          echo "$OLLAMA_SHA256  ollama.tar.zst" | sha256sum -c -
+          mkdir -p "$HOME/.local"
+          tar --zstd -xf ollama.tar.zst -C "$HOME/.local" \
+            --exclude='lib/ollama/cuda_*' --exclude='lib/ollama/vulkan' --exclude='lib/ollama/rocm*'
+          rm ollama.tar.zst
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/ollama" --version
+          echo "install=${SECONDS}" >> "$GITHUB_ENV"
+
+      - name: Serve Ollama and pull the model
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          nohup ollama serve > ollama-serve.log 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -fsS "http://$OLLAMA_HOST/api/tags" > /dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS "http://$OLLAMA_HOST/api/tags" > /dev/null || {
+            echo "::error::ollama did not come up on $OLLAMA_HOST"; cat ollama-serve.log; exit 1; }
+          ollama pull "$OLLAMA_MODEL"
+          ollama list
+          echo "pull=${SECONDS}" >> "$GITHUB_ENV"
+
+      # The exact invocation `just live e2e ollama` uses. The test's own
+      # exit status decides between three outcomes: rows ran and passed
+      # (ok), a row failed against a live server (drift: file an issue, the
+      # job stays green), or the rows could not run at all (tooling: red).
+      - name: Run the live rows
+        id: rows
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          rc=0
+          TAU_OLLAMA_LIVE=1 TAU_OLLAMA_BASE_URL="http://$OLLAMA_HOST" \
+            cargo test --locked -p tau-drivers --all-features --test e2e_live -- --ignored --nocapture ollama_live \
+            2>&1 | tee live.raw || rc=$?
+          # CARGO_TERM_COLOR=always wraps cargo's status words in escapes.
+          sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' live.raw > live.txt
+          passed="$(sed -nE 's#^live ollama/([A-Za-z0-9_]+) .*#\1#p' live.txt | tr '\n' ' ' | sed 's/ $//')"
+          ran="$(sed -nE 's/^live ollama: ([0-9]+) rows.*/\1/p' live.txt | tail -1)"
+          {
+            echo "## live e2e (ollama, keyless)"
+            echo
+            echo "- $(rustc --version); $(ollama --version 2>&1 | head -1); model \`$OLLAMA_MODEL\`"
+            echo "- ref: \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`"
+            echo "- wall: install ${install}s, pull ${pull}s, rows ${SECONDS}s (build included)"
+            echo "- $(grep -E '^live ollama: ' live.txt | tail -1 || echo 'no summary line: the rows did not finish')"
+            echo
+            echo '```'
+            grep -E '^(live ollama/|  parallel:|thread .* panicked|test ollama_live)' live.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" -eq 0 ]; then
+            if [ -z "$ran" ] || [ "$ran" -lt "$ROWS_FLOOR" ]; then
+              echo "::error::ollama_live passed but ran ${ran:-0} rows; the floor is $ROWS_FLOOR (an empty lane must not read green)"
+              exit 1
+            fi
+            echo "ok: $ran rows"
+            exit 0
+          fi
+          # Tooling, not drift: the test never got to a row.
+          if ! grep -q '^running 1 test' live.txt \
+             || grep -qE 'TAU_OLLAMA_LIVE is not 1|ollama is not reachable|^error(\[E[0-9]+\])?: ' live.txt; then
+            echo "::error::ollama_live could not run its rows (exit $rc); see live.txt"
+            exit "$rc"
+          fi
+          # A row failed. Name it: the first expected row without a passed line.
+          failed=""
+          for r in $ROWS; do
+            case " $passed " in *" $r "*) ;; *) failed="$r"; break ;; esac
+          done
+          [ -n "$failed" ] || failed="row-$(( $(wc -w <<<"$passed") + 1 ))"
+          sed -nE '/^thread .* panicked/,/^(note:|test ollama_live)/p' live.txt | head -40 > panic.txt
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          echo "passed=$passed" >> "$GITHUB_OUTPUT"
+          echo "DRIFT $failed (passed: ${passed:-none})"
+
+      - name: Upload the test output and the server log
+        if: always() && steps.rows.outcome != 'skipped'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ollama-live
+          path: |
+            live.txt
+            ollama-serve.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      # One issue per failing row, deduplicated by exact open title so a
+      # row that fails for a week is one issue, not seven.
+      - name: File an issue for the failing row
+        if: always() && steps.rows.outputs.failed != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FAILED: ${{ steps.rows.outputs.failed }}
+          PASSED: ${{ steps.rows.outputs.passed }}
+        run: |
+          set -euo pipefail
+          title="tier3: live ollama drift — $FAILED"
+          existing="$(gh issue list --state open --limit 500 --json number,title \
+            | jq -r --arg t "$title" '.[] | select(.title == $t) | .number' | head -1)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Still failing on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\` (Ollama $OLLAMA_VERSION, \`$OLLAMA_MODEL\`); rows passed before it: ${PASSED:-none}. Run: $RUN_URL"
+            echo "$title: already open as #$existing"
+            exit 0
+          fi
+          body="$(cat <<EOF
+          The nightly keyless live e2e (\`tier3.yml\`) ran \`ollama_live\` from \`drivers/tests/e2e_live.rs\` on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\` against Ollama $OLLAMA_VERSION serving \`$OLLAMA_MODEL\` on ubuntu-latest, and row \`$FAILED\` failed. Rows that passed before it: ${PASSED:-none}.
+
+          \`\`\`
+          $(cat panic.txt)
+          \`\`\`
+
+          - run: $RUN_URL (the \`ollama-live\` artifact holds the full test output and the server log)
+          - Reproduce: \`just live e2e ollama\` against a local Ollama serving \`$OLLAMA_MODEL\`. A local model's API does not move, so look first at our OpenAI-compatible driver and the tool loop, then at the Ollama version pinned in the workflow; a small model can also just choose differently on one night, so a second night's comment here is the signal, not one.
+
+          refs #168, #7
+          EOF
+          )"
+          url="$(gh issue create --title "$title" --label status:ready --body "$body")"
+          echo "$title: opened $url"
