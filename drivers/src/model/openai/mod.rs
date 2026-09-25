@@ -54,12 +54,16 @@
 //!
 //! No retries — a retry is a second `send`, and that is the loop's call
 //! (#34). No token counting: chat-completions servers have no counting
-//! endpoint, so the byte estimate is the estimate. No thinking format of
-//! its own: a `thinking` block in a request is another provider's and is
-//! dropped (ADR-0007 §2); `reasoning_content` in a reply is ignored, not
-//! sealed.
+//! endpoint, so the byte estimate is the estimate. No thinking replay: a
+//! server's in-band reasoning (`reasoning` on Ollama, `reasoning_content`
+//! on vLLM) is sealed into the reply as a read-only `thinking` block tagged
+//! [`PROVIDER`] so the program can see it, and a `thinking` block in a
+//! request is dropped whatever its provider — no chat-completions server
+//! takes reasoning back on the next turn (ADR-0007 §2).
 
 mod wire;
+
+pub use wire::PROVIDER;
 
 use std::sync::Arc;
 use std::time::Duration;

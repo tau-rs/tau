@@ -124,7 +124,7 @@ async fn ollama_tool_loop_reaches_end_turn_over_the_cassette() {
 }
 
 // --- thinking replayed by the loop (Anthropic only: the OpenAI-compatible
-// wire has no thinking format, ADR-0007 §2; #123 is about reading it) ------
+// wire takes no reasoning back, ADR-0007 §2; #123 reads it, below) --------
 
 #[tokio::test]
 async fn anthropic_tool_loop_replays_the_recorded_thinking_block_on_its_second_call() {
@@ -162,6 +162,39 @@ async fn anthropic_tool_loop_replays_the_recorded_thinking_block_on_its_second_c
         recorded.pointer("/messages/1/content/0/signature")
     );
     assert!(second.pointer("/messages/1/content/0/signature").is_some());
+}
+
+// --- thinking read by the loop, never replayed (#123) -----------------------
+
+/// Ollama's `qwen3:1.7b` reasons in-band and the driver seals that text as
+/// a `thinking` block. The loop carries it: the transcript's assistant turn
+/// opens with the recorded reasoning, verbatim, tagged with the driver's
+/// `provider`. The second request is still the recording byte for byte —
+/// `round_trip` checks that — and this pins the reason: the wire assistant
+/// turn has no reasoning key at all.
+#[tokio::test]
+async fn ollama_tool_loop_reads_the_reasoning_and_does_not_replay_it() {
+    let run = round_trip("ollama", openai(QWEN, true), 512).await;
+    let recorded = run
+        .exchanges
+        .first()
+        .and_then(|e| e.response.body.pointer("/choices/0/message/reasoning"))
+        .expect("the cassette carries `reasoning`");
+    let assistant = run.transcript.messages.get(1).unwrap();
+    assert_eq!(
+        assistant.content.first(),
+        Some(&Content::Thinking {
+            provider: tau_drivers::model::openai::PROVIDER.into(),
+            data: recorded.clone(),
+        }),
+        "{:?}",
+        assistant.content
+    );
+    let wire_assistant = run.sent.get(1).unwrap().json();
+    let wire_assistant = wire_assistant.pointer("/messages/2").unwrap();
+    assert_eq!(wire_assistant.get("role"), Some(&json!("assistant")));
+    assert_eq!(wire_assistant.get("reasoning"), None);
+    assert_eq!(wire_assistant.get("reasoning_content"), None);
 }
 
 // --- parallel tool calls to end_turn ---------------------------------------
