@@ -1,7 +1,8 @@
 //! Guard and stub plumbing: every committed cassette is free of secret
 //! shapes and of request headers outside the allowlist and names the
-//! directory it sits in, and the stub's forward mode relays a request to a
-//! real upstream and reports what happened.
+//! directory it sits in; every committed agent CLI transcript is scrubbed
+//! the way ADR-0013 §10 says and names its pin; and the stub's forward mode
+//! relays a request to a real upstream and reports what happened.
 
 #![cfg(feature = "anthropic")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -43,6 +44,113 @@ fn no_cassette_carries_a_secret_shape_or_a_foreign_header() {
             }
         }
     }
+}
+
+/// The agent CLI transcripts under `cassettes/cli/<cli>-<version>/`
+/// (`cassettes/cli/README.md`): one JSON record per line, a header naming
+/// the pin the directory is named after, an `exit` record last, and the
+/// ADR-0013 §10 cuts applied — the `init` event's `plugins`,
+/// `slash_commands` and `skills` gone, a `hook_response` reduced to its
+/// name — because those are one user's machine, not the CLI's surface.
+#[test]
+fn every_cli_transcript_is_scrubbed_and_names_its_pin() {
+    let root = cassette::dir().join("cli");
+    let mut seen = 0;
+    for pin in std::fs::read_dir(&root).unwrap().flatten() {
+        if !pin.path().is_dir() {
+            continue;
+        }
+        let pin_name = pin.file_name().to_str().unwrap().to_owned();
+        for file in std::fs::read_dir(pin.path()).unwrap().flatten() {
+            let path = file.path();
+            if path.extension().is_none_or(|e| e != "jsonl") {
+                continue;
+            }
+            seen += 1;
+            let text = std::fs::read_to_string(&path).unwrap();
+            if let Some(pattern) = cassette::scan_for_secrets(&text) {
+                panic!("{}: matches secret pattern {pattern}", path.display());
+            }
+            let records: Vec<serde_json::Value> = text
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(|line| {
+                    serde_json::from_str(line)
+                        .unwrap_or_else(|e| panic!("{}: {e}: {line}", path.display()))
+                })
+                .collect();
+            let header = records.first().unwrap();
+            assert_eq!(header["tau"], "header", "{}: no header", path.display());
+            assert_eq!(
+                header["v"],
+                1,
+                "{}: unknown transcript version",
+                path.display()
+            );
+            assert_eq!(
+                format!(
+                    "{}-{}",
+                    header["cli"].as_str().unwrap(),
+                    header["version"].as_str().unwrap()
+                ),
+                pin_name,
+                "{}: the header's pin is not its directory",
+                path.display()
+            );
+            assert_eq!(
+                records.last().unwrap()["tau"],
+                "exit",
+                "{}: the last record is how the CLI ended",
+                path.display()
+            );
+            for record in &records {
+                assert!(
+                    record["tau"].is_string(),
+                    "{}: a record names its kind: {record}",
+                    path.display()
+                );
+                if record["tau"] != "stdout" {
+                    continue;
+                }
+                let line = &record["line"];
+                if line["type"] == "system" && line["subtype"] == "init" {
+                    for key in ["plugins", "slash_commands", "skills"] {
+                        assert!(
+                            line.get(key).is_none(),
+                            "{}: init carries `{key}`, one user's machine",
+                            path.display()
+                        );
+                    }
+                    assert!(
+                        record["cut"].is_string(),
+                        "{}: init says what was cut",
+                        path.display()
+                    );
+                }
+                if line["type"] == "system" && line["subtype"] == "hook_response" {
+                    let mut keys: Vec<&str> = line
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .map(String::as_str)
+                        .collect();
+                    keys.sort_unstable();
+                    assert_eq!(
+                        keys,
+                        ["hook_name", "subtype", "type"],
+                        "{}: a hook response keeps only its name",
+                        path.display()
+                    );
+                    assert!(
+                        record["cut"].is_string(),
+                        "{}: the hook response says what was cut",
+                        path.display()
+                    );
+                }
+            }
+        }
+    }
+    assert!(seen >= 7, "the seven #130 runs are committed; found {seen}");
 }
 
 #[test]
