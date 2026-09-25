@@ -17,8 +17,8 @@
 # Two landmines from v1 are designed around here. Scheduled workflows get
 # throttled: every v1 cron fired every ~11-12h regardless of its expression,
 # for months, undetected, so the last step counts this workflow's own
-# scheduled firings in the past 24h and files an issue when the count is
-# not exactly one. And an empty lane reports green: scripts/refold-corpus.sh
+# scheduled firings on the current UTC day and files an issue when the count
+# is not exactly one. And an empty lane reports green: scripts/refold-corpus.sh
 # fails closed below a fixture-count floor.
 #
 # The benchmark judge runs kernel/benches/kpi_ir.rs, ADR-0003's two KPIs
@@ -140,13 +140,19 @@ jobs:
           done < drift.tsv
 
       # The throttle detector. Counts *scheduled* runs of this workflow created
-      # in the last 24 hours. On a scheduled run the count includes this one,
-      # so exactly 1 is healthy: 0 cannot happen, 2+ means the cron is firing
-      # more often than its expression, and a skipped night shows up as 2 the
-      # night after when GitHub catches up. On a manual run the count is
-      # written to the summary and nothing is filed — a dispatch inside the
-      # window would otherwise report a false double firing.
-      - name: Count this workflow's scheduled firings in the last 24h
+      # on the same UTC calendar day as this one. On a scheduled run the count
+      # includes this one, so exactly 1 is healthy: 0 cannot happen, 2+ means
+      # the cron is firing more often than its expression. The window is a
+      # calendar day and not "the last 24 h" because GitHub's scheduler runs
+      # this cron about five hours late with half an hour of jitter either
+      # way: a sliding window anchored at this run caught yesterday's run on
+      # every night that started earlier in the hour than the night before
+      # (#156). The cron is 03:17, so the day boundary sits 20 h away from
+      # it; a delay that crosses midnight is worth the report it produces.
+      # On a manual run the count is written to the summary and nothing is
+      # filed — a dispatch inside the window would otherwise report a false
+      # double firing.
+      - name: Count this workflow's scheduled firings today (UTC)
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
@@ -154,12 +160,12 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          since="$(date -u -d '24 hours ago' '+%Y-%m-%dT%H:%M:%SZ')"
+          day="$(date -u '+%Y-%m-%d')"
           count="$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/tier3.yml/runs" \
-            -f event=schedule -f created=">=$since" -F per_page=100 --jq '.total_count')"
-          echo "scheduled firings since $since: $count (event: $EVENT)"
+            -f event=schedule -f created="$day" -F per_page=100 --jq '.total_count')"
+          echo "scheduled firings on $day (UTC): $count (event: $EVENT)"
           {
-            echo "- scheduled firings in the last 24h: $count (this run: \`$EVENT\`)"
+            echo "- scheduled firings on $day (UTC): $count (this run: \`$EVENT\`)"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$EVENT" != "schedule" ]; then
             echo "not a scheduled run; count is informational"
@@ -172,12 +178,12 @@ jobs:
           existing="$(gh issue list --state open --limit 500 --json number,title \
             | jq -r --arg t "$title" '.[] | select(.title == $t) | .number' | head -1)"
           if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "Again: $count scheduled firing(s) in the 24h before $RUN_URL."
+            gh issue comment "$existing" --body "Again: $count scheduled firing(s) on $day (UTC), counted by $RUN_URL."
             echo "already open as #$existing"
             exit 0
           fi
           body="$(cat <<EOF
-          \`tier3.yml\` counted $count scheduled run(s) of itself created since \`$since\` (this run included). The cron is \`17 3 * * *\`, so the healthy count is exactly 1.
+          \`tier3.yml\` counted $count scheduled run(s) of itself created on \`$day\` (UTC, this run included). The cron is \`17 3 * * *\`, so the healthy count is exactly 1.
 
           v1's crons fired every ~11-12h regardless of their expression, for months, undetected. This is the counter that is supposed to notice. Check the run list for the workflow, then decide whether the schedule moved or GitHub's scheduler did.
 
