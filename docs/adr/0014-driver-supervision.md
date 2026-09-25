@@ -378,7 +378,7 @@ harness, and which a real harness copies or replaces:
 | Event | Reference policy | Why this default |
 |---|---|---|
 | `Crashed` | replace with a fresh instance, up to `k` times per driver (`k = 3`); retire on the `k+1`th | a crash is usually a bug in one request's handling; a crash loop is a bug in the driver |
-| `Overdue` | first: nothing (the request is already unanswered); second in a row on the same driver: replace | one slow request is the world being slow; two is a hung loop |
+| `Overdue` | first: nothing (the request is already unanswered); a second `Overdue` on the same driver (no event reports a recovered request, so this is not a streak): replace (amended 2026-09-25, below) | one slow request is the world being slow; a second on the same instance *may* be a hung loop, and the supervisor cannot tell, because nothing tells it whether the driver answered in between — it replaces on the blunter reading, since a replacement costs one instance and a missed hang costs every request behind it |
 | `Overdrew` | nothing; one report above `n` × its cap on any *capped* dimension is a blowout; the first blowout is free, the second retires (amended 2026-09-20, below) | a misreport is visible in the hash already (#18); what it should *cost* the driver is a harness's call, not the kernel's |
 
 **What #18 becomes.** "Supervision policy for a driver that reports above
@@ -612,7 +612,8 @@ open — a later ADR pays the re-pin with a reason — and this one keeps
 kernel cannot tell slow from dead, and a `DriverDown` it writes on a guess
 is a health record that lies. The request fails either way; whether the
 driver is replaced is the supervisor's, with the reference policy's "second
-in a row" as the default.
+on the same driver" as the default (amended 2026-09-25: it was "second in a
+row", which the events cannot support).
 
 **Fail the queued requests on a crash too.** Simpler to state, rejected:
 nothing saw them, a replacement can take them, and failing them charges the
@@ -631,6 +632,11 @@ through the two verbs.
 - **2026-09-20** — [#18](https://github.com/tau-rs/tau/issues/18): the §6
   `Overdrew` row is **replaced**, not filled in. No kernel change; the
   reference policy in `kernel/tests/m3c_supervision.rs` moves with it.
+- **2026-09-25** — [#176](https://github.com/tau-rs/tau/issues/176): the §6
+  `Overdue` row is **reworded** to what the events can support — a second
+  `Overdue` on the same driver, not "the second in a row". No kernel
+  change; the reference policy in `kernel/tests/m3c_supervision.rs` moves
+  with it. Details after the 2026-09-20 entry, below.
 
 ### Why the first row did not survive
 
@@ -725,3 +731,55 @@ guidance, only another place to be wrong. When a harness crate exists, the
 policy moves into it and this pointer changes; until then the §6 row names
 the test by path, and a change to the policy's shape is a change to this
 amendment.
+
+### 2026-09-25: the `Overdue` row counts a second overdue, not a streak
+
+Found while settling #18 (#174), the same class of defect one row up: a
+policy shape the event stream cannot carry. The row read "second in a row
+on the same driver: replace — one slow request is the world being slow;
+two is a hung loop". A streak needs a break, and nothing can break it: §6
+gives the supervisor three events, `Crashed`, `Overdue` and `Overdrew`,
+and all three are faults. No event says a request came back on time, so a
+supervisor written to the row as it stood could not learn that a driver
+recovered, and "second in a row" was really "second ever". The reference
+policy said as much in code — its counter was cleared only by a `Crashed`
+event or on reaching two — and a driver that went overdue once, answered a
+thousand requests cleanly and went overdue again was replaced under a
+rationale ("two is a hung loop") that did not apply.
+
+**What changes: the words, and the reference policy's shape.** The row now
+says what it does: the first `Overdue` on a driver is remembered and
+nothing else happens; the second `Overdue` on the same driver replaces it.
+The state is one bit per driver, as the `Overdrew` row's is, not a
+counter, and the rationale is honest about being lossy: the supervisor
+cannot distinguish a hung loop from two unrelated slow requests, so it
+acts on the blunter reading. That is a defensible default and not a
+disguised one — `replace_driver` cures liveness, an unneeded replacement
+costs one instance and the queue it inherits, and a hung loop it did not
+replace costs every request behind it at its own bound (§5). The bit is
+cleared when a `Crashed` event replaces the driver, because the bit
+belongs to the instance and the crash is the one recovery the events do
+report: the replacement is a fresh loop, and its predecessor's slow request
+says nothing about it.
+
+**What does not change: the kernel.** Three ways out were on the table.
+*A fourth `DriverEvent` for a request that settled normally* is additive —
+`DriverEvent` is `#[non_exhaustive]` and lives outside `kernel/src/abi/` —
+but it inverts what `supervise()` is: today the supervisor hears only
+about faults, and a per-reply event makes it a firehose every harness must
+drain, to serve one row of one reference policy. *Leaving it to the
+harness's own means* — a harness that wants the streak can watch `Replied`
+in the log or the state it already holds — costs the kernel nothing and
+stays available; it is not the reference policy's business because the
+reference is meant to be copyable as it stands. The choice, as in #174's
+own window question, is not to build machinery for a harness that does
+not exist: when a real harness shows it needs the distinction, that is a
+new issue with the evidence, and the door the Consequences leave open (a
+new `DriverEvent` is additive) is the way through it.
+
+**The obligation is unchanged.** The worked policy is still `struct
+Policy` in `kernel/tests/m3c_supervision.rs`, and the test named for this
+amendment shows the sequence the row now describes: overdue, answered
+cleanly in between, overdue again on the same instance, replaced — and
+that the supervisor saw exactly two events, with nothing between them that
+could have reset the first.
