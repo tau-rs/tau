@@ -1,6 +1,7 @@
 //! What the agent tests share: the ADR-0013 §9 configuration, a scratch
-//! directory that cleans up after itself, and `/bin/sh` scripts standing in
-//! for a CLI.
+//! directory that cleans up after itself, `/bin/sh` scripts standing in
+//! for a CLI, and `tau-fake-cli` replaying a script — or a committed #130
+//! transcript turned into one.
 //!
 //! Reached by `#[path]` rather than through `common/mod.rs`, so that a build
 //! with only the `agent` feature does not have to compile the stub HTTP
@@ -13,6 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde_json::{json, Value};
 use tau_drivers::agent::process::{Bounds, Cancel, Interrupt, Invocation};
 use tau_drivers::agent::AgentConfig;
 
@@ -107,3 +109,154 @@ pub(crate) fn abandon_after(cancel: &Arc<Cancel>, ms: u64) {
         cancel.abandon();
     }));
 }
+
+/// The scripted stand-in for an agent CLI, cargo-built alongside this test
+/// binary (ADR-0013 §10). See its module doc for the script format.
+pub(crate) const FAKE_CLI: &str = env!("CARGO_BIN_EXE_tau-fake-cli");
+
+/// The environment variable `tau-fake-cli` reads its script's path from.
+pub(crate) const SCRIPT_VAR: &str = "TAU_FAKE_CLI_SCRIPT";
+
+/// The whole environment a fake run gets: its script, and what the build's
+/// own instrumentation needs forwarded, for the reasons `common/sandbox.rs`
+/// gives for the shim — the driver hands the child exactly this list.
+pub(crate) fn fake_env(script: &Path) -> Vec<(String, String)> {
+    let mut env = vec![(SCRIPT_VAR.to_owned(), script.display().to_string())];
+    for forwarded in ["LLVM_PROFILE_FILE", "ASAN_OPTIONS"] {
+        if let Ok(value) = std::env::var(forwarded) {
+            env.push((forwarded.to_owned(), value));
+        }
+    }
+    env
+}
+
+/// `tau-fake-cli` replaying `script`, as an invocation.
+pub(crate) fn fake(script: &Path, cwd: &Path, terminal: fn(&[u8]) -> bool) -> Invocation {
+    Invocation {
+        program: PathBuf::from(FAKE_CLI),
+        args: Vec::new(),
+        cwd: cwd.to_path_buf(),
+        env: fake_env(script),
+        first_stdin: None,
+        interrupt: Interrupt::Signal,
+        terminal,
+    }
+}
+
+/// The ADR-0013 §9 registration, with `binary` pointed at `tau-fake-cli`
+/// replaying `script`.
+pub(crate) fn fake_config(script: &Path, root: impl Into<PathBuf>) -> AgentConfig {
+    let mut config = adr_config(root);
+    config.binary = PathBuf::from(FAKE_CLI);
+    config.env = fake_env(script);
+    config
+}
+
+/// Writes `directives` as a JSONL script under `dir`; returns its path.
+pub(crate) fn script(dir: &Path, name: &str, directives: &[Value]) -> PathBuf {
+    let path = dir.join(format!("{name}.jsonl"));
+    let mut text = String::new();
+    for directive in directives {
+        text.push_str(&directive.to_string());
+        text.push('\n');
+    }
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+/// The committed CLI transcripts (`drivers/tests/cassettes/cli/README.md`).
+pub(crate) fn transcripts_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("cassettes")
+        .join("cli")
+}
+
+/// The records of one committed transcript, e.g. `("claude-2.1.272",
+/// "2-stdin-cancel")`.
+pub(crate) fn transcript(pin: &str, run: &str) -> Vec<Value> {
+    let path = transcripts_dir().join(pin).join(format!("{run}.jsonl"));
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// The lines the CLI printed in a transcript, in order.
+pub(crate) fn transcript_stdout(records: &[Value]) -> Vec<Value> {
+    records
+        .iter()
+        .filter(|record| record["tau"] == "stdout")
+        .map(|record| record["line"].clone())
+        .collect()
+}
+
+/// The stimulus a transcript's runner applied after the task, if any.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Stimulus {
+    /// A second stdin line whose `request.subtype` is `interrupt`.
+    Interrupt,
+    /// This signal.
+    Signal(String),
+}
+
+/// Turns a committed transcript into a `tau-fake-cli` script, delays
+/// dropped: what the CLI printed before the runner's stimulus is the
+/// timeline; what it printed after, and its exit status, is the reaction to
+/// that stimulus. A run without a stimulus is a timeline ending in its
+/// exit. The first stdin record is the task and is not scripted: it arrives
+/// through `Invocation::first_stdin`.
+pub(crate) fn script_from_transcript(records: &[Value]) -> (Vec<Value>, Option<Stimulus>) {
+    let mut before = Vec::new();
+    let mut after = Vec::new();
+    let mut stimulus = None;
+    let mut exit = None;
+    let mut task_seen = false;
+    for record in records {
+        match record["tau"].as_str().unwrap() {
+            "stdout" => {
+                let line = json!({ "line": record["line"] });
+                if stimulus.is_some() {
+                    after.push(record["line"].clone());
+                } else {
+                    before.push(line);
+                }
+            }
+            "stdin" if !task_seen => task_seen = true,
+            "stdin" => {
+                assert_eq!(
+                    record["line"]["request"]["subtype"], "interrupt",
+                    "the only scripted stdin stimulus is the interrupt"
+                );
+                stimulus = Some(Stimulus::Interrupt);
+            }
+            "signal" => {
+                stimulus = Some(Stimulus::Signal(
+                    record["name"].as_str().unwrap().to_owned(),
+                ))
+            }
+            "exit" => exit = Some(record["code"].clone()),
+            _ => {}
+        }
+    }
+    let mut directives = before;
+    match &stimulus {
+        None => directives.push(json!({ "exit": exit })),
+        Some(Stimulus::Interrupt) => directives.push(json!({
+            "on": { "stdin": "\"subtype\":\"interrupt\"" },
+            "lines": after,
+            "exit": exit,
+        })),
+        Some(Stimulus::Signal(name)) => directives.push(json!({
+            "on": { "signal": name },
+            "lines": after,
+            "exit": exit,
+        })),
+    }
+    (directives, stimulus)
+}
+
+/// The interrupt `claude` acknowledges (#130 §5a), as the driver writes it.
+pub(crate) const INTERRUPT: &str =
+    "{\"type\":\"control_request\",\"request_id\":\"tau-cancel-1\",\"request\":{\"subtype\":\"interrupt\"}}\n";

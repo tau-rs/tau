@@ -16,6 +16,14 @@ name              = "tau-sandbox-shim"
 path              = "src/bin/tau-sandbox-shim.rs"
 required-features = ["sandbox"]
 
+# The scripted stand-in for an agent CLI (ADR-0013 §10): replays a stdout
+# transcript and reacts to stdin lines and signals as a JSONL script says.
+# Dev-only; every agent test points `AgentConfig::binary` at it.
+[[bin]]
+name              = "tau-fake-cli"
+path              = "src/bin/tau-fake-cli.rs"
+required-features = ["agent"]
+
 [features]
 default   = ["anthropic", "openai", "sandbox", "agent"]
 # The Anthropic Messages API model driver (ADR-0006 §6, Anthropic column).
@@ -32,7 +40,9 @@ sandbox   = ["dep:tokio", "dep:nix", "dep:signal-hook", "dep:schemars"]
 # CLI adapters (#127, #128) arrive behind their own features on top of it.
 # Deliberately no `reqwest`: an agent driver spawns a binary and reads its
 # stdout, and never speaks to a provider itself (ADR-0013 §8).
-agent     = ["dep:nix", "dep:schemars"]
+# `signal-hook` is for `tau-fake-cli` alone: the driver sends signals, it
+# never receives them.
+agent     = ["dep:nix", "dep:schemars", "dep:signal-hook"]
 
 [dependencies]
 tau-kernel = { path = "../kernel", version = "0.0.0" }
