@@ -90,3 +90,34 @@ Agent futures hold only plain memory and the kernel handle. No guards across an
 
 Tier 3 opens issues rather than failing builds. Drift is not the committer's
 fault, and blaming the wrong person trains everyone to ignore red.
+
+### Provider drift is caught by hand
+
+No tier talks to a paid model provider. The cassettes under
+`drivers/tests/cassettes/` are a photograph of each provider taken the day
+they were recorded, and the replay tests compare the driver against that
+photograph. So when Anthropic or OpenAI changes the shape of a tool-call id,
+a usage field or a thinking signature, replay stays green: it is checking
+the driver against the past, not the present. Nothing scheduled notices.
+
+The only detector is a person running the live modes from Keychain keys:
+
+- `just live record` re-records the cassettes; a diff in the committed
+  files is the provider having moved.
+- `just live e2e` runs the tool-loop programs against the real APIs and
+  asserts the shape of what happened, not the bytes.
+
+Who and when: the maintainer, before any PR that touches
+`drivers/src/model/**` lands, and after any provider changelog entry that
+names the Messages or chat-completions wire. A re-record that changes a
+cassette goes in its own PR that says which provider moved and how.
+
+The honest consequence: between those runs, provider drift is undetected by
+design. That is a decision (#139), not a gap waiting for a workflow:
+provider keys do not live in repository secrets and CI never spends on a
+provider API. A key in a public repository's secrets is reachable by anyone
+with write access, and a nightly that spends is a bill that grows with every
+row somebody adds. The keyless half of the same idea, `just live e2e ollama`
+against a local model, is what a nightly can run (#168), but it guards our
+driver and tool loop against a real server; a local model's API does not
+move, so it says nothing about the providers.
