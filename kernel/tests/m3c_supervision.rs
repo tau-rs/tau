@@ -141,15 +141,17 @@ fn cpu_grant() -> Budget {
 }
 
 /// A driver whose behaviour is the payload's first word: `boom` unwinds,
-/// `hang…` takes the request and never returns, `over` reports a little
-/// above the ceiling, `blowout` reports far above it, `cpu` reports far
-/// above a compute ceiling, `uncapped` bills a dimension no ceiling here
-/// names, and anything else is echoed under `tag` and billed one token per
-/// byte. `taken` is notified when a `hang` request is taken.
+/// `hang…` takes the request and never returns, `slow…` takes it and
+/// answers once `release` is notified, `over` reports a little above the
+/// ceiling, `blowout` reports far above it, `cpu` reports far above a
+/// compute ceiling, `uncapped` bills a dimension no ceiling here names, and
+/// anything else is echoed under `tag` and billed one token per byte.
+/// `taken` is notified when a `hang` or `slow` request is taken.
 #[derive(Clone)]
 struct Scripted {
     tag: &'static str,
     taken: Arc<Notify>,
+    release: Arc<Notify>,
     dropped: Arc<AtomicBool>,
 }
 
@@ -164,6 +166,7 @@ impl Scripted {
         Self {
             tag,
             taken: Arc::clone(taken),
+            release: Arc::default(),
             dropped: Arc::default(),
         }
     }
@@ -184,6 +187,17 @@ impl Driver for Scripted {
         if payload.starts_with(b"hang") {
             self.taken.notify_one();
             return Box::pin(std::future::pending());
+        }
+        if payload.starts_with(b"slow") {
+            self.taken.notify_one();
+            let release = Arc::clone(&self.release);
+            let mut answer = format!("{}: ", self.tag).into_bytes();
+            answer.extend_from_slice(&payload);
+            let cost = tokens(u64::try_from(payload.len()).unwrap());
+            return Box::pin(async move {
+                release.notified().await;
+                (answer, cost)
+            });
         }
         if payload == b"over" {
             return Box::pin(async move { (b"re: over".to_vec(), tokens(OVER)) });
@@ -231,21 +245,29 @@ enum Verb {
     Retired,
 }
 
-/// The reference policy of ADR-0014 §6 and its first amendment, as harness
+/// The reference policy of ADR-0014 §6 and its amendments, as harness
 /// code: replace a crashed driver up to `k` times and retire it on the
 /// `k+1`th; do nothing about a first overdue request and replace on the
-/// second in a row; and, for a report above the ceiling, look at every
-/// dimension the harness capped, call one report above `blowout[dim]` times
-/// its cap a blowout, let the first blowout go, and retire on the second.
+/// second on the same driver; and, for a report above the ceiling, look at
+/// every dimension the harness capped, call one report above
+/// `blowout[dim]` times its cap a blowout, let the first blowout go, and
+/// retire on the second.
 ///
 /// What it deliberately does not do is accumulate. Both drivers in this
 /// workspace overshoot a soft fence by design (ADR-0009 §3, ADR-0013 §7),
 /// so a running total fires on traffic rather than on misbehaviour.
+///
+/// What it cannot do is see a streak. Every event the kernel raises is a
+/// fault; none reports a request that came back on time, so "the second
+/// overdue in a row" is not a rule a supervisor can implement — it would
+/// be "the second overdue, ever", wearing a rationale it does not earn
+/// (amended 2026-09-25, #176). The policy says what it does instead: one
+/// bit per driver, set by the first `Overdue`, acted on by the next.
 struct Policy {
     k: u32,
     blowout: BTreeMap<DimKey, u64>,
     crashes: BTreeMap<DriverId, u32>,
-    overdue_in_a_row: BTreeMap<DriverId, u32>,
+    overdue: BTreeSet<DriverId>,
     blown: BTreeSet<DriverId>,
     seen: Vec<DriverEvent>,
 }
@@ -279,7 +301,7 @@ impl Policy {
             k,
             blowout,
             crashes: BTreeMap::new(),
-            overdue_in_a_row: BTreeMap::new(),
+            overdue: BTreeSet::new(),
             blown: BTreeSet::new(),
             seen: Vec::new(),
         })
@@ -297,7 +319,11 @@ impl Policy {
                 let n = self.crashes.entry(driver.clone()).or_insert(0);
                 *n += 1;
                 if *n <= self.k {
-                    self.overdue_in_a_row.remove(&driver);
+                    // The overdue bit belongs to the instance, and a crash
+                    // is the one recovery the events do report: the
+                    // replacement is a fresh loop, and its predecessor's
+                    // slow request says nothing about it.
+                    self.overdue.remove(&driver);
                     kernel.replace_driver(&driver, fresh()).unwrap();
                     Verb::Replaced
                 } else {
@@ -306,14 +332,22 @@ impl Policy {
                 }
             }
             DriverEvent::Overdue { driver, .. } => {
-                let n = self.overdue_in_a_row.entry(driver.clone()).or_insert(0);
-                *n += 1;
-                if *n >= 2 {
-                    self.overdue_in_a_row.remove(&driver);
+                if self.overdue.insert(driver.clone()) {
+                    // The first: already unanswered, and slow and dead look
+                    // the same from outside. Remembered as one bit, not a
+                    // counter of consecutive overdues — nothing could
+                    // break such a streak, so it would count every one.
+                    Verb::Nothing
+                } else {
+                    // The second on the same instance. This may be a hung
+                    // loop or two unrelated slow requests, and the
+                    // supervisor cannot tell which: it takes the blunter
+                    // reading because a replacement costs one instance
+                    // and a missed hang costs every request behind it.
+                    // The fresh instance starts with its bit clear.
+                    self.overdue.remove(&driver);
                     kernel.replace_driver(&driver, fresh()).unwrap();
                     Verb::Replaced
-                } else {
-                    Verb::Nothing
                 }
             }
             DriverEvent::Overdrew { driver, excess, .. } => {
@@ -754,6 +788,105 @@ async fn a_late_reply_to_an_unanswered_request_is_dead_letter() {
         "no second bill"
     );
     conserved(&state, &root_grant());
+    refolds(&kernel, &sink);
+}
+
+#[tokio::test]
+async fn a_second_overdue_on_the_same_driver_replaces_it_and_nothing_between_could_have_reset_the_first(
+) {
+    // ADR-0014 §6, the `Overdue` row as amended 2026-09-25 (#176): the
+    // first overdue is remembered, the second on the same driver replaces
+    // it — and "the same driver" is the whole rule, because no event
+    // reports a request that came back. Here v1 goes overdue, is released
+    // and answers `hello` cleanly, then goes overdue again: the clean reply
+    // is in the log and never reached the supervisor, which saw exactly two
+    // events and replaced v1 on the second.
+    let driver = Scripted::new("v1");
+    let taken = Arc::clone(&driver.taken);
+    let release = Arc::clone(&driver.release);
+    let (kernel, sink, clock, ns) = boot(driver, Some(BOUND));
+    let model = model_cap(&ns);
+    let acted = Arc::new(Notify::new());
+    let acted_root = Arc::clone(&acted);
+    let supervisor = supervise(
+        &kernel,
+        Policy::new(&kernel, 3, blowout_multipliers(), &[model_id()]).unwrap(),
+        Arc::clone(&acted),
+        || Scripted::new("v2"),
+    );
+    let root = kernel
+        .spawn_root(
+            program(move |root| async move {
+                // 1. overdue: taken, then past the bound. The supervisor
+                //    does nothing; v1 stays up.
+                let first = root.send(model, b"slow").unwrap();
+                let reply = root.recv(Match::Corr(first)).await.unwrap();
+                from_kernel(&reply, first);
+                assert_eq!(reply.consumed, Some(billed_ceiling()));
+                // 2. the same instance answers cleanly. Not an event.
+                let corr = root.send(model, b"hello").unwrap();
+                let reply = root.recv(Match::Corr(corr)).await.unwrap();
+                assert_eq!(root.read(reply.payload).unwrap(), b"v1: hello");
+                // 3. overdue again on v1: replaced.
+                let second = root.send(model, b"slow again").unwrap();
+                let reply = root.recv(Match::Corr(second)).await.unwrap();
+                from_kernel(&reply, second);
+                assert_eq!(reply.consumed, Some(billed_ceiling()));
+                acted_root.notified().await;
+                let corr = root.send(model, b"after").unwrap();
+                let reply = root.recv(Match::Corr(corr)).await.unwrap();
+                assert_eq!(root.read(reply.payload).unwrap(), b"v2: after");
+                root.exit(b"")
+            }),
+            ns,
+            root_grant(),
+        )
+        .unwrap();
+    taken.notified().await;
+    clock.advance(BOUND).unwrap();
+    // v1's late answer is dead letter; its loop is free for `hello`.
+    release.notify_one();
+    taken.notified().await;
+    clock.advance(BOUND).unwrap();
+    kernel.drained().await.unwrap();
+    kernel.shutdown();
+    let policy = supervisor.await.unwrap();
+
+    assert_eq!(
+        policy.seen,
+        [
+            DriverEvent::Overdue {
+                driver: model_id(),
+                corr: Corr::new(0),
+                agent: root,
+            },
+            DriverEvent::Overdue {
+                driver: model_id(),
+                corr: Corr::new(2),
+                agent: root,
+            },
+        ],
+        "two events, both faults: the clean reply between them is not one"
+    );
+    assert!(policy.overdue.is_empty(), "the replacement starts clear");
+    let entries = kernel.entries();
+    assert_eq!(
+        health(&entries),
+        [
+            "unanswered:Overdue:taken",
+            "unanswered:Overdue:taken",
+            "down:Retired",
+            "up",
+        ]
+    );
+    assert!(
+        entries.iter().any(|e| matches!(
+            e,
+            Entry::Replied { msg, .. } if msg.corr == Some(Corr::new(1))
+        )),
+        "the clean reply is in the log, where a harness with its own means could see it"
+    );
+    conserved(&kernel.state(), &root_grant());
     refolds(&kernel, &sink);
 }
 
