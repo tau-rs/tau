@@ -4,8 +4,8 @@
 # committer's fault, and a red build that blames the wrong person trains
 # everyone to ignore red. This file holds item 1 of the seven, the
 # determinism drift sentinel (#72), item 5, the benchmark regression
-# judge (#151), the keyless live e2e (#168), and item 6, the flake hunter
-# (#204). The rest is tracked in #7.
+# judge (#151), the keyless live e2e (#168), item 6, the flake hunter
+# (#204), and item 3, dependency drift (#205). The rest is tracked in #7.
 #
 # The sentinel refolds every log in corpus/ with today's main, through
 # `tau replay --expect` (#91), and expects the state hash each was pinned at. A hash that moved means the reducer
@@ -58,6 +58,19 @@
 # this tier exists to prevent. The job goes red only when it could not have
 # hunted: a build error, a run without a report, fewer tests than
 # TESTS_FLOOR, or two runs that ran different sets.
+#
+# Dependency drift is two jobs. `deps` moves every crate in Cargo.lock to
+# the newest version its manifest range allows and runs the Tier 1 build
+# and test path on the result: Dependabot sends one PR per bump, and this
+# answers the question those cannot, whether everything-at-latest still
+# passes Tier 1. A leg that fails files an issue naming the crate the first
+# error points into, so the week's bump PRs arrive with the answer already
+# known. `advisories` runs cargo-deny's advisory check on the *committed*
+# lockfile, because a RUSTSEC entry arrives independently of any commit and
+# Tier 1's deny job only runs when someone pushes; each advisory files its
+# own issue. Both go red only when they could not have checked: the update
+# or the database fetch failing, or a pass over fewer tests or crates than
+# their floors.
 
 name: tier3
 
@@ -95,6 +108,7 @@ env:
   ROWS_FLOOR: 3
   RUNS: 5
   TESTS_FLOOR: 400
+  CRATES_FLOOR: 50
 
 jobs:
   sentinel:
@@ -608,3 +622,175 @@ jobs:
             url="$(gh issue create --title "$title" --label bug --label status:ready --body "$body")"
             echo "$title: opened $url"
           done < flakes.tsv
+
+  # Item 3, first half: the whole-lockfile canary (#205). scripts/dep-drift.sh
+  # rewrites Cargo.lock in the checkout (never pushed) and runs the legs;
+  # the moved lockfile is uploaded so an issue's reader can diff it.
+  deps:
+    name: dependency drift (cargo update, Tier 1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write       # to file the drift issue
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: deps-drift   # the updated lockfile builds a different tree
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-nextest,cargo-deny
+
+      - name: Update every crate and run Tier 1 on the result
+        id: drift
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          ./scripts/dep-drift.sh | tee drift.txt
+          git diff --stat Cargo.lock | tail -1 > lock-stat.txt || true
+          {
+            echo "## dependency drift (cargo update)"
+            echo
+            echo "- $(rustc --version); $(cargo deny --version)"
+            echo "- ref: \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`"
+            echo "- $(tail -1 drift.txt)"
+            echo "- wall (update + legs): ${SECONDS}s"
+            echo
+            echo '```'
+            grep -E '^(ok|DRIFT) ' drift.txt || true
+            echo '```'
+            echo
+            echo "<details><summary>what moved</summary>"
+            echo
+            echo '```'
+            grep -E '^[[:space:]]*(Updating|Adding|Removing|Downgrading) [^ ]+ v[0-9]' target/dep-drift/update.txt || echo "(nothing moved)"
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the moved lockfile and the leg logs
+        if: always() && steps.drift.outcome != 'skipped'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dep-drift
+          path: |
+            Cargo.lock
+            drift.txt
+            drift-deps.tsv
+            target/dep-drift/
+          if-no-files-found: warn
+          retention-days: 14
+
+      # One issue, deduplicated by the crate the error points at, so the
+      # same break is one issue for as long as it lasts.
+      - name: File the drift issue
+        if: always() && steps.drift.outputs.leg != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          LEG: ${{ steps.drift.outputs.leg }}
+          CRATE: ${{ steps.drift.outputs.crate }}
+          MOVED: ${{ steps.drift.outputs.moved }}
+        run: |
+          set -euo pipefail
+          title="tier3: dependency drift — $CRATE"
+          existing="$(gh issue list --state open --limit 500 --json number,title \
+            | jq -r --arg t "$title" '.[] | select(.title == $t) | .number' | head -1)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Still failing on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`: \`$LEG\` after \`cargo update\` moved $MOVED crate(s). Run: $RUN_URL"
+            echo "$title: already open as #$existing"
+            exit 0
+          fi
+          body="$(cat <<EOF
+          The nightly canary (\`tier3.yml\`) ran \`cargo update\` on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`, moving $MOVED crate(s), and the \`$LEG\` leg of Tier 1 failed on the result. The first error points at \`$CRATE\`.
+
+          \`\`\`
+          $(cat target/dep-drift/excerpt.txt)
+          \`\`\`
+
+          <details><summary>what moved</summary>
+
+          \`\`\`
+          $(grep -E '^[[:space:]]*(Updating|Adding|Removing|Downgrading) [^ ]+ v[0-9]' target/dep-drift/update.txt || echo "(nothing moved)")
+          \`\`\`
+          </details>
+
+          - run: $RUN_URL (the \`dep-drift\` artifact holds the moved \`Cargo.lock\` and every leg's log)
+          - Nothing on \`main\` is broken: the committed lockfile still passes Tier 1. This is what the next Dependabot PR that moves \`$CRATE\` will find, known now.
+          - Reproduce: \`./scripts/dep-drift.sh\` (it rewrites \`Cargo.lock\`; \`git checkout Cargo.lock\` after), or \`cargo update -p $CRATE\` and the leg by hand.
+
+          refs #205, #7
+          EOF
+          )"
+          url="$(gh issue create --title "$title" --label status:ready --body "$body")"
+          echo "$title: opened $url"
+
+  # Item 3, second half: advisories on the committed lockfile (#205).
+  # scripts/advisories.sh reads cargo-deny's JSON; the ignore list in
+  # deny.toml is honoured, so an ignored advisory is a note, not a finding.
+  advisories:
+    name: advisories (cargo-deny, committed lockfile)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write       # to file an issue per advisory
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-deny
+
+      - name: Check advisories
+        id: advisories
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          ./scripts/advisories.sh | tee advisories.txt
+          {
+            echo "## advisories (cargo-deny)"
+            echo
+            echo "- $(cargo deny --version)"
+            echo "- ref: \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`"
+            echo "- $(tail -1 advisories.txt)"
+            echo "- wall: ${SECONDS}s"
+            echo
+            echo '```'
+            grep -E '^ADVISORY ' advisories.txt || echo "(no advisory at warning or above)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # One issue per advisory, deduplicated by exact open title so an
+      # advisory that stands for a month is one issue, not thirty.
+      - name: File an issue per advisory
+        if: always() && steps.advisories.outputs.findings != '' && steps.advisories.outputs.findings != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          open="$(gh issue list --state open --limit 500 --json number,title)"
+          while IFS=$'\t' read -r id crate version kind title_text url; do
+            title="tier3: advisory — $id ($crate)"
+            existing="$(jq -r --arg t "$title" '.[] | select(.title == $t) | .number' <<<"$open" | head -1)"
+            if [ -n "$existing" ]; then
+              echo "$title: already open as #$existing"
+              gh issue comment "$existing" --body "Still reported on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`: $crate $version, $kind. Run: $RUN_URL"
+              continue
+            fi
+            body="$(cat <<EOF
+          The nightly advisory check (\`tier3.yml\`) ran \`cargo deny check advisories\` on the committed lockfile at \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\` and cargo-deny reported \`$crate $version\`: **$kind**, $title_text.
+
+          - advisory: ${url:-https://rustsec.org/advisories/$id}
+          - run: $RUN_URL
+          - Nothing on \`main\` changed; the advisory did. A \`vulnerability\` is a bump (Dependabot's security update may already be open) or, when no fixed version exists, a decision. An \`unmaintained\` or \`unsound\` notice is a replacement or an \`ignore\` entry in \`deny.toml\` that names this issue and the condition for removing it. Tier 1's deny job is red on every PR until one of those lands.
+
+          refs #205, #7
+          EOF
+          )"
+            url_new="$(gh issue create --title "$title" --label status:ready --body "$body")"
+            echo "$title: opened $url_new"
+          done < advisories.tsv
