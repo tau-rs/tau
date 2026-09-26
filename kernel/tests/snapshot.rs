@@ -90,7 +90,11 @@ fn every_corpus_log_replays_from_each_of_its_snapshots() {
 #[test]
 fn every_fixture_replays_from_each_of_its_snapshots() {
     let logs = logs_in(&fixtures());
-    assert_eq!(logs.len(), 5, "the five milestone fixtures");
+    assert_eq!(
+        logs.len(),
+        6,
+        "the five milestone fixtures and the ADR-0015 wall-grace one"
+    );
     for path in logs {
         let log = read(&path);
         let full = fold(log.entries()).unwrap().hash();
