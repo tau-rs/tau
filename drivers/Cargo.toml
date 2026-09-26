@@ -68,6 +68,10 @@ tokio      = { workspace = true, features = ["rt", "rt-multi-thread", "macros", 
 # The real tool loop, run over this driver against the stub: the test that
 # the second call of a tool exchange replays the thinking blocks (ADR-0007).
 libtau     = { path = "../libtau", version = "0.0.0" }
+# The validator libtau refuses a tool call with, pointed at each projected
+# schema: a self-compared fixture cannot see a schema that refuses every
+# input (#200).
+boon       = { workspace = true }
 
 [lints]
 workspace = true

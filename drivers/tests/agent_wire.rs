@@ -16,6 +16,7 @@ mod agent;
 
 use std::time::Duration;
 
+use boon::{Compiler, Draft, SchemaIndex, Schemas};
 use serde_json::{json, Value};
 use tau_drivers::agent::process::{Ending, Run, Rung};
 use tau_drivers::agent::wire::{
@@ -198,6 +199,98 @@ fn a_cli_that_would_refuse_a_field_never_shows_it() {
     assert!(properties.contains_key("task") && properties.contains_key("workspace"));
     assert!(!properties.contains_key("tools"));
     assert!(!properties.contains_key("budget"));
+}
+
+/// A schema compiled the way `libtau`'s toolbox compiles a tool's, and
+/// what it says of a value.
+struct Compiled {
+    schemas: Schemas,
+    index: SchemaIndex,
+}
+
+impl Compiled {
+    fn new(name: &str, schema: &Value) -> Self {
+        let uri = format!("tool:///{name}");
+        let mut schemas = Schemas::new();
+        let mut compiler = Compiler::new();
+        compiler.set_default_draft(Draft::V2020_12);
+        compiler.add_resource(&uri, schema.clone()).unwrap();
+        let index = compiler.compile(&uri, &mut schemas).unwrap();
+        Self { schemas, index }
+    }
+
+    fn check(&self, value: &Value) -> Result<(), String> {
+        self.schemas
+            .validate(value, self.index)
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// A fixture request as a model would write it: without `v`.
+fn projected(fixture: &str) -> Value {
+    let mut value: Value = serde_json::from_str(fixture).unwrap();
+    value.as_object_mut().unwrap().remove("v");
+    value
+}
+
+/// Every projection, validated *against* rather than compared to itself:
+/// a well-formed schema that refuses every input passed the fixture tests
+/// for months (#200). The ADR's own requests are the inputs, the validator
+/// is the one `libtau` refuses a tool call with, and every `Caps` is a
+/// projection, so the codex column is covered the day it lands.
+#[test]
+fn every_projection_accepts_the_fixture_requests_and_refuses_a_stranger() {
+    let run = projected(REQUEST_RUN);
+    let resume = projected(REQUEST_RESUME);
+    let mut bare_run = run.clone();
+    bare_run.as_object_mut().unwrap().remove("tools");
+    bare_run.as_object_mut().unwrap().remove("budget");
+    let mut stranger = bare_run.clone();
+    stranger["model"] = json!("opus");
+
+    for caps in [true, false]
+        .into_iter()
+        .flat_map(|tools| [true, false].map(|budget| (tools, budget)))
+        .flat_map(|(tools, budget)| {
+            [true, false].map(move |resume| Caps {
+                tools,
+                budget,
+                resume,
+            })
+        })
+    {
+        let schema = Compiled::new("claude", &wire::schema(caps));
+
+        // A run with nothing optional is what every CLI can do.
+        assert_eq!(schema.check(&bare_run), Ok(()), "{caps:?}");
+
+        // The ADR's run names tools and a budget: accepted exactly where the
+        // CLI can honour both, refused where it would ignore either.
+        let verdict = schema.check(&run);
+        assert_eq!(
+            verdict.is_ok(),
+            caps.tools && caps.budget,
+            "{caps:?}: {verdict:?}"
+        );
+
+        // The ADR's resume: accepted exactly where the CLI can resume.
+        let verdict = schema.check(&resume);
+        assert_eq!(verdict.is_ok(), caps.resume, "{caps:?}: {verdict:?}");
+
+        // One key the wire does not have: refused by every projection —
+        // the closure #200 restored bites on the branch, not on the root.
+        let err = schema.check(&stranger).unwrap_err();
+        assert!(err.contains("model"), "{caps:?}: {err}");
+    }
+
+    // The envelope schema (ADR-0006 §5), against the envelope a session wrote.
+    let envelope: Value =
+        serde_json::from_str(include_str!("fixtures/agent/envelope.json")).unwrap();
+    let schema = Compiled::new("envelope", &tau_drivers::agent::envelope::schema());
+    assert_eq!(schema.check(&envelope), Ok(()));
+    let mut short = envelope.clone();
+    short.as_object_mut().unwrap().remove("events");
+    assert!(schema.check(&short).is_err(), "every field is required");
 }
 
 #[test]

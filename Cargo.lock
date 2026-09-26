@@ -1631,6 +1631,7 @@ dependencies = [
 name = "tau-drivers"
 version = "0.0.0"
 dependencies = [
+ "boon",
  "libtau",
  "nix",
  "reqwest",
