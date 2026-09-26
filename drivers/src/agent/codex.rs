@@ -321,10 +321,13 @@ fn classify(said: &str) -> ErrorKind {
 }
 
 /// *#128*: the words a logged-out `codex` is expected to use. `401
-/// Unauthorized` is #130 §3's; the rest unpinned, read tolerantly.
+/// Unauthorized` is #130 §3's; the rest unpinned, read tolerantly. Never a
+/// bare `401`: the messages carry hex request ids, and three digits in one
+/// of those would turn a backend error into a logout.
 fn names_auth(lowered: &str) -> bool {
     [
-        "401",
+        "status: 401",
+        "status 401",
         "unauthorized",
         "unauthenticated",
         "not logged in",
@@ -342,7 +345,8 @@ fn names_auth(lowered: &str) -> bool {
 /// Unpinned; read tolerantly.
 fn names_rate_limit(lowered: &str) -> bool {
     [
-        "429",
+        "status: 429",
+        "status 429",
         "rate limit",
         "rate_limit",
         "too many requests",

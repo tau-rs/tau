@@ -793,6 +793,25 @@ async fn a_failed_turn_that_names_an_auth_failure_is_unavailable_and_flips_the_v
 }
 
 #[tokio::test]
+async fn a_request_id_that_happens_to_contain_401_is_not_a_logout() {
+    let dir = agent::Temp::new("hex-id");
+    let script = codex::failed_script(
+        dir.path(),
+        "hex",
+        "stream error: unexpected status 500 Internal Server Error, request id: 9f401c4293b7-CDG",
+    );
+    let (_stub, driver) = driver(dir.path(), &script);
+    let (reply, _) = send(&driver, 1, codex::run_payload("x")).await;
+    let (kind, _) = error_of(&reply);
+    assert_eq!(
+        kind,
+        ErrorKind::Provider,
+        "three digits in a hex id are not a status"
+    );
+    assert!(driver.verdict().is_ready());
+}
+
+#[tokio::test]
 async fn a_rate_limit_or_a_quota_window_is_throttled_by_name() {
     let dir = agent::Temp::new("throttled");
     for (name, message) in [
