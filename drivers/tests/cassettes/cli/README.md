@@ -38,7 +38,15 @@ schema as committed before #128 (an open nested object, then `oneOf`), and
 the turn failed before any item; `envelope::schema()` now closes every
 object and spells enums `anyOf`. Run 7 is run 1 with `--ignore-user-config`,
 the isolation flag the driver's fixed argv carries: the login is read
-regardless, and the run completes.
+regardless, and the run completes. Runs 8 and 9 are
+[#223](https://github.com/tau-rs/tau/issues/223), recorded on 2026-09-26
+on the same pin with the driver's own fixed argv, in the driver's order,
+under an environment of exactly `HOME`, `PATH` and `USER`. Run 8 is run 1
+with the runner's stdin pipe held open for five seconds after spawn, then
+closed: the CLI printed nothing until the close, then `thread.started`
+60 ms later (360 ms after spawn in run 1), so `exec` reads a piped stdin
+to end of file before it starts. Run 9 is `exec resume` of a thread id the
+CLI has no rollout for: nothing on stdout, exit 1, the reason on stderr.
 
 `codex-0.46.0/` is one run on the pin ADR-0013 §7 named: on 2026-09-26 that
 version was refused every model for a ChatGPT login (five retries, then

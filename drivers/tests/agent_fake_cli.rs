@@ -308,6 +308,36 @@ fn a_delayed_line_still_arrives_and_eof_ends_a_spent_timeline() {
     );
 }
 
+/// `{"on": {"eof": true}, "ignore": true}`: a CLI the supervisor gives no
+/// stdin (`codex exec`, #223) sees end of file at spawn, and that is not
+/// what ends it. The spent timeline waits for a signal instead.
+#[test]
+fn an_ignored_eof_leaves_a_spent_timeline_waiting_for_a_signal() {
+    let dir = agent::Temp::new("eof-ignored");
+    let path = agent::script(
+        dir.path(),
+        "eof-ignored",
+        &[
+            json!({ "line": { "type": "thread.started" } }),
+            json!({ "on": { "eof": true }, "ignore": true }),
+            json!({ "on": { "signal": "SIGINT" }, "lines": [{ "type": "ping" }] }),
+            json!({ "on": { "signal": "SIGTERM" }, "exit": 0 }),
+        ],
+    );
+    let (mut child, mut stdout) = spawn(&path, Stdio::null());
+    assert_eq!(next(&mut stdout).unwrap()["type"], "thread.started");
+    // Spent, stdin at end of file, and still alive: SIGINT gets its ping.
+    signal(&child, Signal::SIGINT);
+    assert_eq!(
+        next(&mut stdout).unwrap()["type"],
+        "ping",
+        "alive past end of file"
+    );
+    signal(&child, Signal::SIGTERM);
+    assert_eq!(rest(&mut stdout), Vec::<Value>::new());
+    assert_eq!(child.wait().unwrap().code(), Some(0));
+}
+
 #[test]
 fn a_missing_or_malformed_script_exits_2_with_nothing_on_stdout() {
     let dir = agent::Temp::new("bad");

@@ -572,10 +572,12 @@ every model for a ChatGPT login by the time #128 recorded (amendment
 | `usage` | `result.usage` summed per §6; `total_cost_usd × 10⁶` → `cost_microusd`; `num_turns` → `turns` | `input_tokens` and `output_tokens` **as stated**: `cached_input_tokens` and `reasoning_output_tokens` are subsets of them, not further classes, so nothing is summed. No cost stated, no turn count: both `null`. |
 | `unavailable` at run time | a `result` whose `errors[]` or `api_error_status` names authentication — *#127* | an `error` or `turn.failed` whose `message` names `401 Unauthorized` (#130 §3) or a login — *#128*, read by name. The unsigned loop never ends on its own; the probe (§6) is the gate, and the driver flips the verdict when a run's events name it. |
 | `throttled` | `result.api_error_status` 429, or a terminal `rate_limit_event` whose `status` is not `allowed` — *#127* pins the strings | a `turn.failed` naming 429, a rate limit, a quota or a usage limit — *#128*, read by name |
-| `provider` | any other `result` with `is_error` | any other `turn.failed`: a rejected model (0.46.0 run 1), a rejected schema (run 6), a backend 4xx/5xx; five `error` retries precede it |
+| `provider` | any other `result` with `is_error` | any other `turn.failed`: a rejected model (0.46.0 run 1), a rejected schema (run 6), a backend 4xx/5xx; five `error` retries precede it. And a refusal before any thread started (the row below) |
+| unknown `session` on `resume` | *unrecorded* | **nothing on stdout, exit 1**, `Error: thread/resume: thread/resume failed: no rollout found for thread id <id> (code -32600)` on stderr (#223 run 9). No thread started, so it is `error.provider` with that text and **nothing is billed**: §5's ceiling is for a turn that may have been spent, and this run never reached the provider. The adapter reads it before `settle`: a run that printed nothing and exited non-zero. |
 | interrupt (§5, first rung) | `{"type":"control_request","request_id":"<id>","request":{"subtype":"interrupt"}}` on stdin (`init.capabilities` lists `interrupt_receipt_v1`); `control_response` acknowledges | `SIGINT` to the group — `exec` has no in-band channel. **Nothing printed, exit 1, no terminal event** (#128 run 2): the first rung answers but reports nothing, so an abandoned `codex` run bills the ceiling. |
 | after `SIGTERM` | nothing printed, exit 143, no `result` (#130 §5c) | nothing printed, **exit 0**, no terminal event (#128 run 3) |
 | environment | exactly `config.env` — `HOME` so the CLI finds its own login (and `USER` on macOS, where the Keychain lookup keys on it: 2026-09-26 amendment), `PATH` if the binary path is not absolute, and any key the harness *chooses* to pass | same |
+| stdin | the task, then the interrupt; closed when the terminal event lands | **none** (`/dev/null`). `exec` reads a piped stdin to end of file before it starts — *Reading additional input from stdin...* — and printed nothing for the five seconds #223 run 8 held the pipe, then `thread.started` 60 ms after the close. A pipe nobody writes is a stall to the wall bound, so the supervisor gives a child it will never speak to (no first message, a signal for the interrupt) no stdin at all. |
 | transcript | one JSON value per stdout line; kinds seen: `system/{hook_started,hook_response,session_state_changed,init}`, `rate_limit_event`, `assistant`, `user`, `control_response`, `result` | one JSON value per stdout line (`--json`): `thread.started`, `turn.started`, `item.started`, `item.completed` (`item.type` `agent_message` or `command_execution`), `error`, `turn.completed`, `turn.failed` |
 
 Both columns share one rule for the environment: **nothing is inherited**.
@@ -1079,3 +1081,32 @@ neighbour for.
   private seam, not a public trait" now reads "public and sealed", which
   keeps what that sentence was for: nothing in `libtau` or the kernel learns
   either adapter, and no third implementor exists.
+- **2026-09-26, later** — [#223](https://github.com/tau-rs/tau/issues/223)
+  recorded the two rows [#196](https://github.com/tau-rs/tau/pull/196) had
+  at 0.154.0 and #195 had no transcript for, on 0.157.1 with the driver's
+  fixed argv (runs 8 and 9). Both are the CLI saying nothing on stdout,
+  and both moved code, not just the table:
+  - **stdin** — `exec` reads a piped stdin to end of file before it starts.
+    The driver never writes this CLI's stdin, so the pipe the supervisor
+    held open for every child was a stall to the wall bound: a `codex`
+    run through the driver as merged by #195 would have been
+    `{ "limit": "wall" }` at the ceiling, every time, and no test saw it
+    because `tau-fake-cli` does not wait on stdin. The supervisor now gives
+    a child it will never speak to — no first message, a signal for the
+    interrupt — `/dev/null` (§7's new stdin row); `claude`, which takes its
+    task on stdin, is unchanged. The `codex` test stub reads its stdin to
+    end of file the way the CLI does, so the stall cannot come back
+    unseen, and the fake grew `{"on": {"eof": true}, "ignore": true}` for
+    the scripts that must outlive a closed stdin to be signalled.
+  - **unknown `session`** — `exec resume` of an id with no rollout prints
+    nothing, exits 1, and puts the reason on stderr. §2's `session` row
+    said `error.provider` with the CLI's text; the adapter read `provider`
+    only from a `turn.failed`, so the reply was `error.lost` at the
+    ceiling — a run that never started, billed as one that vanished.
+    `Codex` now overrides the `Cli::refused_before_start` hook the
+    amendment above left for it: a run that ended by itself having printed
+    nothing, with a non-zero exit, is `error.provider` with the exit code
+    and stderr in the message, nothing billed. §5's ceiling is for a turn
+    the provider may have spent; a CLI that printed nothing started none.
+    The kind is still read by name for a login or a limit in that text, so
+    a pre-start refusal that names one lands on its own row.

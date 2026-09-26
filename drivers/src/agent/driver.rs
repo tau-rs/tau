@@ -103,8 +103,9 @@ pub trait Cli: sealed::Sealed + Default + Send + Sync + 'static {
     /// A run the CLI refused before starting a turn — exited without a
     /// terminal event for a reason its exit and stderr make plain — as the
     /// reply it should get instead of `settle`'s `error.lost` at the
-    /// ceiling. `None`, the default, hands the run to `settle`. The hook for
-    /// `codex`'s unknown-thread `resume` row, once it is pinned (#223).
+    /// ceiling. `None`, the default, hands the run to `settle`. `codex`
+    /// overrides it for a run that printed nothing and exited non-zero: its
+    /// unknown-thread `resume` row (#223 run 9).
     fn refused_before_start(&self, run: &Run) -> Option<RunError> {
         let _ = run;
         None

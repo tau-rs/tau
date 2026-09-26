@@ -166,6 +166,45 @@ async fn a_failed_turn_settles_at_what_was_stated_which_is_nothing() {
 }
 
 #[tokio::test]
+async fn an_unknown_thread_refuses_through_the_kernel_and_bills_nothing() {
+    let dir = agent::Temp::new("kernel-unknown");
+    let script = codex::replay_script(dir.path(), PIN, "9-resume-unknown");
+    let stub = CodexStub::new(dir.path());
+    let mut config = stub.config(&script, dir.path());
+    config.env.push((
+        codex::REFUSE_VAR.to_owned(),
+        "Error: thread/resume: thread/resume failed: no rollout found for thread id \
+         00000000-0000-0000-0000-000000000000 (code -32600)"
+            .to_owned(),
+    ));
+    let driver = CodexDriver::new(config).unwrap();
+    let (reply, root) = run_one(
+        driver,
+        codex::resume_payload(
+            "00000000-0000-0000-0000-000000000000",
+            "Also write bye.txt containing bye",
+        ),
+    )
+    .await;
+    let Stop::Error(error) = reply.stop else {
+        panic!("{:?}", reply.stop)
+    };
+    assert_eq!(error.kind, ErrorKind::Provider);
+    assert!(
+        error.message.contains("no rollout found"),
+        "{}",
+        error.message
+    );
+    assert_eq!(root.spent.get(&DimKey::Tokens), None, "nothing billed");
+    assert_eq!(
+        root.budget.get(&DimKey::Tokens),
+        Some(1_000_000),
+        "released whole"
+    );
+    assert!(root.overdraft.is_empty());
+}
+
+#[tokio::test]
 async fn a_logged_out_cli_refuses_through_the_kernel_and_bills_nothing() {
     let dir = agent::Temp::new("kernel-logged-out");
     let script = codex::replay_script(dir.path(), PIN, "1-hello");
