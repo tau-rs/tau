@@ -9,6 +9,7 @@
 
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -260,3 +261,157 @@ pub(crate) fn script_from_transcript(records: &[Value]) -> (Vec<Value>, Option<S
 /// The interrupt `claude` acknowledges (#130 §5a), as the driver writes it.
 pub(crate) const INTERRUPT: &str =
     "{\"type\":\"control_request\",\"request_id\":\"tau-cancel-1\",\"request\":{\"subtype\":\"interrupt\"}}\n";
+
+// --- a `claude` the driver can construct ------------------------------------
+
+/// The environment variable the stub reads its login marker from: the file
+/// exists, the stub is "logged in".
+pub(crate) const LOGIN_VAR: &str = "TAU_TEST_LOGIN";
+/// Where the stub appends one byte per login probe it answers.
+pub(crate) const PROBES_VAR: &str = "TAU_TEST_PROBES";
+/// Where the stub writes the argv of the last run it handed to the fake,
+/// NUL-separated (the worker contract spans lines).
+pub(crate) const ARGV_VAR: &str = "TAU_TEST_ARGV";
+
+/// A stand-in `claude` binary the driver can be *constructed* over.
+///
+/// `tau-fake-cli` replays its script whatever its argv, so it cannot answer
+/// `--version` or `auth status` on its own. This `/bin/sh` wrapper answers
+/// both the way #130 recorded them and `exec`s the fake for everything
+/// else, recording the argv it was given. `TAU_TEST_LOGIN` names a marker
+/// file: present, the stub is logged in (exit 0, the JSON #130 saw, minus
+/// the email); absent, it is logged out (exit 1, a line on stderr).
+pub(crate) struct ClaudeStub {
+    pub(crate) binary: PathBuf,
+    pub(crate) login: PathBuf,
+    pub(crate) probes: PathBuf,
+    pub(crate) argv: PathBuf,
+}
+
+impl ClaudeStub {
+    pub(crate) fn new(dir: &Path) -> Self {
+        let binary = dir.join("claude");
+        let body = format!(
+            "#!/bin/sh\n\
+             case \"$1\" in\n\
+               --version) echo \"2.1.272 (Claude Code)\"; exit 0 ;;\n\
+               auth)\n\
+                 printf . >> \"${PROBES_VAR}\"\n\
+                 if [ -f \"${LOGIN_VAR}\" ]; then\n\
+                   echo '{{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\"}}'\n\
+                   exit 0\n\
+                 fi\n\
+                 echo 'Not logged in. Run `claude auth login` first.' >&2\n\
+                 exit 1 ;;\n\
+             esac\n\
+             printf '%s\\0' \"$@\" > \"${ARGV_VAR}\"\n\
+             exec \"{fake}\" \"$@\"\n",
+            fake = FAKE_CLI,
+        );
+        std::fs::write(&binary, body).unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        Self {
+            binary,
+            login: dir.join("logged-in"),
+            probes: dir.join("probes"),
+            argv: dir.join("argv"),
+        }
+    }
+
+    /// Marks the stub logged in, or out.
+    pub(crate) fn set_logged_in(&self, logged_in: bool) {
+        if logged_in {
+            std::fs::write(&self.login, "").unwrap();
+        } else {
+            let _ = std::fs::remove_file(&self.login);
+        }
+    }
+
+    /// How many login probes the stub has answered.
+    pub(crate) fn probes(&self) -> usize {
+        std::fs::read_to_string(&self.probes)
+            .map(|s| s.len())
+            .unwrap_or(0)
+    }
+
+    /// The argv of the last run.
+    pub(crate) fn argv(&self) -> Vec<String> {
+        std::fs::read_to_string(&self.argv)
+            .map(|s| {
+                s.split('\0')
+                    .filter(|a| !a.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The ADR-0013 §9 registration over this stub, replaying `script`,
+    /// logged in, rooted at `root`.
+    pub(crate) fn config(&self, script: &Path, root: impl Into<PathBuf>) -> AgentConfig {
+        self.set_logged_in(true);
+        let mut config = adr_config(root);
+        config.binary = self.binary.clone();
+        config.permission = Some("acceptEdits".to_owned());
+        config.env = fake_env(script);
+        config
+            .env
+            .push((LOGIN_VAR.to_owned(), self.login.display().to_string()));
+        config
+            .env
+            .push((PROBES_VAR.to_owned(), self.probes.display().to_string()));
+        config
+            .env
+            .push((ARGV_VAR.to_owned(), self.argv.display().to_string()));
+        config
+    }
+}
+
+/// Polls until `path` exists, or about five seconds pass.
+///
+/// For a script with a `touch` directive: the fake installs its signal
+/// handlers before its first timeline step, so once the marker is there a
+/// signal is caught, however slowly the binary started under load — which
+/// is what a test that climbs past the first rung must know before it
+/// abandons the run (#182 is the shape of the flake this prevents).
+pub(crate) fn wait_for(path: &Path) {
+    for _ in 0..500 {
+        if path.exists() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("{} never appeared", path.display());
+}
+
+/// The `run` payload the tests send: the ADR-0013 §2 shape, task only.
+pub(crate) fn run_payload(task: &str) -> Vec<u8> {
+    serde_json::to_vec(&json!({ "op": "run", "task": task })).unwrap()
+}
+
+/// A script that prints a scrubbed #130 transcript's stdout and exits as
+/// it did — `1-hello` is the happy path, `6-max-turns-1` the turn bound.
+pub(crate) fn replay_script(dir: &Path, pin: &str, run: &str) -> PathBuf {
+    let records = transcript(pin, run);
+    let (directives, _) = script_from_transcript(&records);
+    script(dir, run, &directives)
+}
+
+/// A one-run script: `init` with `session_id`, then this `result` line,
+/// then `exit` with `code`. For the rows no #130 transcript reaches.
+pub(crate) fn synthetic_script(dir: &Path, name: &str, result: Value, code: i64) -> PathBuf {
+    script(
+        dir,
+        name,
+        &[
+            json!({ "line": {
+                "type": "system", "subtype": "init",
+                "session_id": "11111111-2222-3333-4444-555555555555",
+                "model": "claude-opus-5[1m]", "apiKeySource": "none",
+                "permissionMode": "acceptEdits",
+            }}),
+            json!({ "line": result }),
+            json!({ "exit": code }),
+        ],
+    )
+}
