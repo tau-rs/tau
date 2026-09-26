@@ -35,11 +35,19 @@ async fn cpu_limit_is_the_host_kernel_killing_the_run_billed_at_the_ceiling() {
 
 #[tokio::test]
 async fn wall_limit_is_the_shim_killing_the_run_with_real_usage() {
-    let (reply, root) = run_one(
-        driver(config(5, Duration::from_millis(500))),
-        request("echo waiting; sleep 20; echo never"),
-    )
-    .await;
+    let mut c = config(5, Duration::from_millis(500));
+    // The driver's last resort fires at `wall + abandon_grace` counted from
+    // the shim's spawn; the shim's wall bound only starts once it has set
+    // its limits, spawned the interpreter, and written the partial report
+    // (ADR-0009 §4). The grace therefore has to absorb the shim's whole
+    // startup plus its kill-reap-report tail, and under full-workspace load
+    // the default second was not enough: the shim was SIGKILLed before its
+    // report and the reply was `lost` (#211). This test is about the wall
+    // bound, not the last resort — `a_shim_that_never_reports_...` below
+    // is — so the grace is wide. It costs nothing on the green path: the
+    // shim reports at the wall and the driver returns at once.
+    c.abandon_grace = Duration::from_secs(10);
+    let (reply, root) = run_one(driver(c), request("echo waiting; sleep 20; echo never")).await;
     assert_eq!(reply.stop, Stop::WallLimit, "{reply:?}");
     assert_eq!(reply.stdout, "waiting\n");
     let ms = reply.usage.compute_ms();
