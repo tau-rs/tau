@@ -28,7 +28,9 @@ the resumer's cwd, not the thread's original one. Run 6 is the first
 attempt at run 1: OpenAI's structured-output mode rejected the envelope
 schema as committed before #128 (an open nested object, then `oneOf`), and
 the turn failed before any item; `envelope::schema()` now closes every
-object and spells enums `anyOf`.
+object and spells enums `anyOf`. Run 7 is run 1 with `--ignore-user-config`,
+the isolation flag the driver's fixed argv carries: the login is read
+regardless, and the run completes.
 
 `codex-0.46.0/` is one run on the pin ADR-0013 §7 named: on 2026-09-26 that
 version was refused every model for a ChatGPT login (five retries, then

@@ -20,7 +20,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use tau_drivers::agent::{
-    probe_login, probe_version, AgentConfig, Availability, ConfigError, Probe, Verdict,
+    probe_login, probe_version, AgentConfig, Availability, ConfigError, LoginOutput, Probe, Verdict,
 };
 
 /// Writes an executable script into `dir` and returns its path.
@@ -59,8 +59,9 @@ fn config(dir: &Path, marker: &Path) -> AgentConfig {
 
 /// `claude auth status` carries the user's email, organisation id and name.
 /// One field ever reaches a reply, never the document (ADR-0013 §2, §8).
-fn mode_from_login(out: &str) -> Option<String> {
-    out.contains("\"authMethod\":\"claude.ai\"")
+fn mode_from_login(out: &LoginOutput) -> Option<String> {
+    out.stdout
+        .contains("\"authMethod\":\"claude.ai\"")
         .then(|| "none".to_owned())
 }
 

@@ -28,8 +28,9 @@ pub const VERSION: u16 = 1;
 /// A driver whose CLI has no per-session tool allowlist refuses a present
 /// `tools` rather than folding it into the prompt, and omits the field from
 /// the schema it projects, so a model never writes one. Same for `budget`,
-/// and for the `resume` op — which `codex exec` cannot serve at 0.46.0,
-/// because `exec resume` has no JSON stream to read a terminal event from.
+/// and for the `resume` op — which `codex exec` could not serve at 0.46.0,
+/// because `exec resume` had no JSON stream to read a terminal event from;
+/// 0.157.1 has one (#128 run 4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Caps {
     /// The CLI has a per-session tool allowlist.
