@@ -1,0 +1,204 @@
+# Tier 3 item 2 (docs/HANDOFF.md §8, #207): the long fuzz. Nightly, on main.
+#
+# Tier 2's fuzz job runs each target for fifteen minutes and throws the
+# grown corpus away. This is the same five targets, the paths attacker-
+# controlled bytes enter by (fuzz/fuzz_targets/), for hours instead of
+# minutes, and the corpus each grows is kept: restored from the Actions
+# cache at the start of the night and saved back at the end, minimised, so
+# every night starts from the last night's coverage rather than from the
+# seeds. A crash, a timeout, an OOM or a leak files an issue with the
+# reproducer's name and the panic; the input that found it is not the
+# committer's fault, so the job stays green. Red only when the target could
+# not run: nightly or cargo-fuzz missing, the build failing, a run that
+# ends without libFuzzer's DONE line or below the execution floor.
+#
+# Its own workflow file, not a job in tier3.yml: a four-hour job in that
+# file's concurrency group would hold a manual dispatch (the
+# `baseline=record` flow of #151) behind it for the night. Four hours per
+# target because GitHub caps a job at six; five targets is twenty
+# runner-hours a night, free on a public repository.
+#
+# The two landmines from v1 apply here as they do in tier3.yml. Every
+# scheduled workflow counts its own firings per UTC day
+# (scripts/count-firings.sh) and files when the count is not exactly one;
+# and the executions floor in scripts/long-fuzz.sh is what keeps a target
+# that ran nothing from reading green.
+
+name: tier3-fuzz
+
+on:
+  schedule:
+    # 04:23 UTC: an odd minute, away from the top of the hour and from
+    # tier3.yml's own slot; the day boundary is nineteen hours away.
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: >-
+          Seconds to fuzz each target. The nightly runs 14400 (four hours);
+          a dispatch can run a short one to prove the pipeline.
+        default: "14400"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tier3-fuzz-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  BUDGET: ${{ github.event.inputs.seconds || '14400' }}
+  EXECS_FLOOR: 100000
+
+jobs:
+  # Same nightly-beside-the-pin and cleared-RUSTFLAGS rationale as tier2's
+  # fuzz job: cargo-fuzz needs nightly for the sanitizer flags, and
+  # `-D warnings` on a moving nightly is the toolchain canary's job (#206),
+  # not this one's. The host triple is named because install-action ships
+  # a static musl cargo-fuzz and ASan does not exist for musl.
+  fuzz:
+    name: fuzz (${{ matrix.target }}, long)
+    runs-on: ubuntu-latest
+    # The budget plus a cold build, the corpus restore, and cmin.
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [msg-envelope, log-read-from, decode-reply-bytes, decode-reply-hostile, rule-parse]
+    permissions:
+      contents: read
+      issues: write       # to file a finding
+      actions: write      # to save the corpus cache
+    env:
+      RUSTFLAGS: ""
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install nightly beside the pinned toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install nightly --profile minimal
+          cargo +nightly --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: fuzz -> target
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-fuzz
+
+      # The corpus from the last night. Cache entries are immutable, so
+      # each run saves under its own key and the next restores the newest
+      # entry under the prefix. Nothing restored is fine: the first night,
+      # or an entry evicted after a week unused, starts from the seeds.
+      - name: Restore the corpus
+        id: restore
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-
+
+      - name: Fuzz
+        id: fuzz
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          ./scripts/long-fuzz.sh | tee fuzz-run.txt
+          {
+            echo "## fuzz ($TARGET, long)"
+            echo
+            echo "- $(cargo +nightly --version); $(cargo fuzz --version)"
+            echo "- ref: \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`; budget ${BUDGET}s; restored: \`${{ steps.restore.outputs.cache-matched-key || 'nothing' }}\`"
+            echo "- $(tail -1 fuzz-run.txt)"
+            echo "- wall (build + fuzz + cmin): ${SECONDS}s"
+            echo
+            echo '```'
+            grep -E '^(ok|FINDING) ' fuzz-run.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Saved even after a finding: the corpus that led to the crash is
+      # the corpus the fix's run should start from.
+      - name: Save the corpus
+        if: always() && steps.fuzz.outcome != 'skipped'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+
+      - name: Keep the reproducer and the log
+        if: always() && steps.fuzz.outcome != 'skipped'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: long-fuzz-${{ matrix.target }}
+          path: |
+            fuzz-run.txt
+            findings-fuzz.tsv
+            fuzz/artifacts/${{ matrix.target }}/
+            target/long-fuzz/
+          if-no-files-found: warn
+          retention-days: 30
+
+      # One issue per target, deduplicated by open title: the same target
+      # crashing for a week is one issue, and a different input the next
+      # night is a comment on it, not a second issue.
+      - name: File the finding
+        if: always() && steps.fuzz.outputs.findings != '' && steps.fuzz.outputs.findings != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          IFS=$'\t' read -r target kind artifact excerpt < findings-fuzz.tsv
+          title="tier3: fuzz $kind — $target"
+          existing="$(gh issue list --state open --limit 500 --json number,title \
+            | jq -r --arg t "$title" '.[] | select(.title == $t) | .number' | head -1)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Again on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`: \`$(basename "$artifact")\`. Run: $RUN_URL"
+            echo "$title: already open as #$existing"
+            exit 0
+          fi
+          body="$(cat <<EOF
+          The nightly long fuzz (\`tier3-fuzz.yml\`) ran \`fuzz/fuzz_targets/${target//-/_}.rs\` on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\` for up to ${BUDGET}s and libFuzzer reported a **$kind**: \`$(basename "$artifact")\`.
+
+          \`\`\`
+          $(cat "$excerpt")
+          \`\`\`
+
+          - run: $RUN_URL (the \`long-fuzz-$target\` artifact holds the reproducer under \`fuzz/artifacts/$target/\` and the full log)
+          - Reproduce: download the artifact, then \`cd fuzz && cargo +nightly fuzz run $target artifacts/$target/$(basename "$artifact")\`. The target's invariant is at the top of its file; a $kind is that invariant broken by bytes from outside, which is the class of bug the targets exist to find (#36).
+          - The fix's PR adds the reproducer to \`fuzz/seeds/$target/\` so Tier 2's fifteen minutes replay it on every kernel PR.
+
+          refs #207, #7
+          EOF
+          )"
+          url="$(gh issue create --title "$title" --label bug --label status:ready --body "$body")"
+          echo "$title: opened $url"
+
+  # The throttle detector, after the targets so a count that runs first
+  # cannot report on a night whose targets were then cancelled.
+  firings:
+    name: firings today (UTC)
+    runs-on: ubuntu-latest
+    needs: fuzz
+    if: always()
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write       # to file the firings issue
+      actions: read       # to count this workflow's own scheduled runs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Count this workflow's scheduled firings today (UTC)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW: tier3-fuzz.yml
+          CRON: "23 4 * * *"
+          EVENT: ${{ github.event_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REFS: "#207, #7"
+        run: ./scripts/count-firings.sh
