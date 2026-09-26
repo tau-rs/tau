@@ -5,7 +5,8 @@
 # everyone to ignore red. This file holds item 1 of the seven, the
 # determinism drift sentinel (#72), item 5, the benchmark regression
 # judge (#151), the keyless live e2e (#168), item 6, the flake hunter
-# (#204), and item 3, dependency drift (#205). The rest is tracked in #7.
+# (#204), item 3, dependency drift (#205), and item 4, the toolchain canary
+# (#206). The rest is tracked in #7.
 #
 # The sentinel refolds every log in corpus/ with today's main, through
 # `tau replay --expect` (#91), and expects the state hash each was pinned at. A hash that moved means the reducer
@@ -71,6 +72,15 @@
 # own issue. Both go red only when they could not have checked: the update
 # or the database fetch failing, or a pass over fewer tests or crates than
 # their floors.
+#
+# The toolchain canary runs the Tier 1 build-and-test path on beta and on
+# nightly: clippy under `-D warnings`, the `ci` nextest profile, doctests.
+# The pin in rust-toolchain.toml moves by hand and Dependabot has no
+# ecosystem for it; Tier 2 runs beta on deep runs and only warns. This runs
+# every night and files: a lint that will be a warning on the next stable
+# is an error here now, six weeks early, and the issue carries the compiler
+# version and the first error. Red only when the channel could not be
+# installed or the suite passed over fewer tests than TESTS_FLOOR.
 
 name: tier3
 
@@ -794,3 +804,106 @@ jobs:
             url_new="$(gh issue create --title "$title" --label status:ready --body "$body")"
             echo "$title: opened $url_new"
           done < advisories.tsv
+
+  # Item 4: the toolchain canary (#206). The channel is installed beside
+  # the pin and selected with RUSTUP_TOOLCHAIN for this job only, the way
+  # tier2's beta leg does it; rust-toolchain.toml stays the single source
+  # of truth for everything else. The cache key names the channel: a
+  # different compiler is a different build tree.
+  toolchain:
+    name: toolchain canary (${{ matrix.channel }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [beta, nightly]
+    permissions:
+      contents: read
+      issues: write       # to file the canary issue
+    env:
+      CHANNEL: ${{ matrix.channel }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain
+      - name: Install the channel beside the pin
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$CHANNEL" --profile minimal --component clippy
+          RUSTUP_TOOLCHAIN="$CHANNEL" rustc --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: toolchain-${{ matrix.channel }}
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-nextest
+
+      - name: Run Tier 1 on the channel
+        id: canary
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          ./scripts/toolchain-canary.sh | tee canary.txt
+          {
+            echo "## toolchain canary ($CHANNEL)"
+            echo
+            echo "- $(head -1 canary.txt)"
+            echo "- ref: \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`"
+            echo "- $(tail -1 canary.txt)"
+            echo "- wall (build + legs): ${SECONDS}s"
+            echo
+            echo '```'
+            grep -E '^(ok|DRIFT) ' canary.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the leg logs
+        if: always() && steps.canary.outcome != 'skipped'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: toolchain-canary-${{ matrix.channel }}
+          path: |
+            canary.txt
+            drift-toolchain.tsv
+            target/toolchain-canary/
+          if-no-files-found: warn
+          retention-days: 14
+
+      # One issue per channel, deduplicated by open title: the compiler
+      # moves every night, so the version goes in the body and the repeat
+      # comments, not the title.
+      - name: File the canary issue
+        if: always() && steps.canary.outputs.leg != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          LEG: ${{ steps.canary.outputs.leg }}
+          VERSION: ${{ steps.canary.outputs.version }}
+        run: |
+          set -euo pipefail
+          title="tier3: toolchain canary — $CHANNEL"
+          existing="$(gh issue list --state open --limit 500 --json number,title \
+            | jq -r --arg t "$title" '.[] | select(.title == $t) | .number' | head -1)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Still failing on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`: \`$LEG\` on \`$VERSION\`. Run: $RUN_URL"
+            echo "$title: already open as #$existing"
+            exit 0
+          fi
+          body="$(cat <<EOF
+          The nightly toolchain canary (\`tier3.yml\`) ran Tier 1's build-and-test path on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\` with \`$VERSION\`, and the \`$LEG\` leg failed.
+
+          \`\`\`
+          $(cat target/toolchain-canary/excerpt.txt)
+          \`\`\`
+
+          - run: $RUN_URL (the \`toolchain-canary-$CHANNEL\` artifact holds every leg's log)
+          - Nothing on \`main\` is broken for the pinned compiler (\`rust-toolchain.toml\`); this is what the pin will meet when it moves to this channel's stable. A new lint under \`-D warnings\` is the usual shape: fix it now while it is a warning on the pin, or record why not.
+          - Reproduce: \`rustup toolchain install $CHANNEL --component clippy\`, then \`CHANNEL=$CHANNEL ./scripts/toolchain-canary.sh\`.
+          - A nightly that fails for a day and heals is nightly; the second comment here is the signal, not the first. Beta failing is the next stable failing.
+
+          refs #206, #7
+          EOF
+          )"
+          url="$(gh issue create --title "$title" --label status:ready --body "$body")"
+          echo "$title: opened $url"
