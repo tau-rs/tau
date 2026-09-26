@@ -332,6 +332,15 @@ sequenceDiagram
 - **The same path handles a wall-bound kill** with `stop: "wall_limit"`, and
   a driver drop: `SandboxDriver`'s `Drop` signals every open run, so a
   harness shutting down leaves no interpreter behind.
+- **The wall deadline is counted from the partial report** (amended by
+  [#220](https://github.com/tau-rs/tau/issues/220)). The shim's wall clock
+  starts once it has set its rlimits, spawned the interpreter, and written
+  the partial report; the driver watches for that report and arms its own
+  `wall + abandon_grace` when it appears, so the grace covers the shim's
+  kill-reap-report tail and nothing else. Until the report appears, the
+  same `wall + abandon_grace` from the spawn bounds the startup. Counting
+  from the spawn made the grace absorb the startup too, and on a loaded
+  host that turned a healthy `wall_limit` into `lost` at the ceiling.
 
 Nothing here is a syscall or a kernel change. `abandon` already exists; the
 sandbox is the first driver whose abandon has a process to reach.

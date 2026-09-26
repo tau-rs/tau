@@ -55,6 +55,13 @@
 //! driver `SIGKILL`s both groups and replies `error.lost`. Dropping the last
 //! handle to the driver abandons every open run the same way, so a harness
 //! shutting down leaves no interpreter behind.
+//!
+//! The same last resort backs the wall bound. The shim's wall clock starts
+//! when it writes its partial report, after its rlimits and the
+//! interpreter's spawn, so the driver arms its own `wall + abandon_grace`
+//! from that report's appearance, not from the spawn: the grace covers the
+//! shim's kill-reap-report tail and nothing else. Startup, before the
+//! report, is bounded by the same `wall + abandon_grace` from the spawn.
 
 // Shared by path with the shim binary; each half uses one direction.
 #[allow(dead_code)]
@@ -68,7 +75,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -87,6 +94,9 @@ pub const SHIM_NAME: &str = "tau-sandbox-shim";
 
 /// The file in the scratch directory the shim reports through.
 const REPORT_FILE: &str = ".tau-sandbox-report.json";
+/// How often the run thread looks for the shim's partial report while
+/// waiting for it. A run's startup is a few of these on a quiet host.
+const ARMED_POLL: Duration = Duration::from_millis(20);
 
 /// Everything the harness decides about one sandbox capability.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -127,8 +137,11 @@ pub struct SandboxConfig {
     /// Where scratch directories are made. `None`: the system temporary
     /// directory.
     pub scratch_root: Option<PathBuf>,
-    /// How long after `SIGTERM` the driver waits for the shim's report
-    /// before killing both process groups and replying `error.lost`.
+    /// How long after `SIGTERM`, or after the shim's own wall bound, the
+    /// driver waits for the shim's report before killing both process
+    /// groups and replying `error.lost`. The wall bound is counted from
+    /// the shim's partial report, so this covers only the shim's
+    /// kill-reap-report tail, not its startup.
     pub abandon_grace: Duration,
     /// The opening sentence of `describe()`. `None`: "Run code with
     /// `<interpreter>`." The limits are always appended; the harness may
@@ -526,6 +539,8 @@ impl Runs {
 enum Event {
     /// `abandon` was called for this run.
     Abandon,
+    /// The shim's partial report appeared: its wall clock is running.
+    Armed,
     /// The shim is gone; here is how it went.
     Exited(std::io::Result<ExitStatus>),
     /// One output pipe reached end of file.
@@ -647,14 +662,34 @@ fn run(settings: &Settings, slot: &Slot, payload: &[u8]) -> (Reply, Consumption)
     std::thread::spawn(move || {
         let _ = wait_tx.send(Event::Exited(child.wait()));
     });
+    // The shim's wall clock starts when its partial report appears; this
+    // thread tells the wait loop so its own deadline starts then too. A
+    // sleep between looks, never a clock read; `done` stops it when the run
+    // ends before the report ever appears.
+    let done = Arc::new(AtomicBool::new(false));
+    let armed_tx = tx.clone();
+    let armed_path = report_path.clone();
+    let armed_done = Arc::clone(&done);
+    std::thread::spawn(move || {
+        while !armed_done.load(Ordering::Acquire) {
+            if armed_path.exists() {
+                let _ = armed_tx.send(Event::Armed);
+                return;
+            }
+            std::thread::sleep(ARMED_POLL);
+        }
+    });
 
     // Now the run can be abandoned; an abandon that came first is honoured.
-    if slot.listen(tx) {
+    let mut abandoned = slot.listen(tx);
+    if abandoned {
         signal(shim_pid, Signal::SIGTERM);
     }
 
     // The wait, without a clock: the shim bounds the wall itself, so a shim
-    // that is still there past `wall + abandon_grace` is a shim in trouble.
+    // that is still there `wall + abandon_grace` after its wall clock
+    // started is a shim in trouble. Until the partial report says it has
+    // started, the same span from the spawn bounds the startup.
     let grace = config.abandon_grace;
     let mut deadline = config.wall.saturating_add(grace);
     let mut status = None;
@@ -672,9 +707,17 @@ fn run(settings: &Settings, slot: &Slot, payload: &[u8]) -> (Reply, Consumption)
                 deadline = grace;
             }
             Ok(Event::Drained) => drained += 1,
+            // The grace starts over from the shim's wall clock, unless a
+            // shorter deadline is already running: an abandon's grace, or
+            // the last resort's.
+            Ok(Event::Armed) if status.is_none() && !abandoned && !last_resort => {
+                deadline = config.wall.saturating_add(grace);
+            }
+            Ok(Event::Armed) => {}
             // Only while the shim is still ours to signal: once reaped, its
             // pid may belong to someone else.
             Ok(Event::Abandon) if status.is_none() => {
+                abandoned = true;
                 signal(shim_pid, Signal::SIGTERM);
                 deadline = grace;
             }
@@ -692,6 +735,7 @@ fn run(settings: &Settings, slot: &Slot, payload: &[u8]) -> (Reply, Consumption)
             Err(_) => break,
         }
     }
+    done.store(true, Ordering::Release);
 
     let report = Report::read(&report_path).ok();
     let shim_ok = matches!(&status, Some(Ok(status)) if status.success());
