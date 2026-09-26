@@ -25,17 +25,16 @@
 //!
 //! # What is pinned here, and what is not
 //!
-//! Every mapping below that #130 observed on 2.1.272 is tested against the
-//! committed transcripts under `drivers/tests/cassettes/cli/claude-2.1.272/`.
-//! Three rows of the ADR's table are marked *#127* because #130 could not
-//! reach them, and this lane could not either without a live run it does not
-//! make: the `result.subtype` of a `--max-budget-usd` exhaustion, the
-//! strings a `result` carries when the CLI is logged out, and those of a
-//! rate limit. Each is read tolerantly here — a subtype or a
-//! `terminal_reason` that names the bound, an `api_error_status` of 401,
-//! 403 or 429, an `errors[]` entry that names authentication or a rate
-//! limit — and the ADR's amendment says so, so the drift job (§10) knows
-//! which rows to pin when it first sees one.
+//! Every mapping below is tested against the committed transcripts under
+//! `drivers/tests/cassettes/cli/claude-2.1.272/`: #130's seven runs, and
+//! the four #194 recorded for the rows #130 could not reach — a
+//! `--json-schema` run (8), a `--max-budget-usd` exhaustion (9), the login
+//! probe while logged out (10), and a print run while logged out (11).
+//! Every string matched below is one of those transcripts' own. The one
+//! row nobody has reached is a rate limit: `throttled` is read from the
+//! two structured places the CLI has for it — `api_error_status` 429 and a
+//! `rate_limit_event` whose `status` is not `allowed` — and never from
+//! words, so the drift job (§10) pins it the day it first sees one.
 
 use std::sync::Arc;
 
@@ -44,6 +43,7 @@ use tau_kernel::abi::{Budget as KernelBudget, Consumption, Corr};
 use tau_kernel::driver::{Driver, ToolSchema};
 use tau_kernel::kernel::{BoxFuture, Delivery};
 
+use super::envelope;
 use super::process::{self, Interrupt, Invocation, Run};
 use super::wire::{self, Caps, ErrorKind, Limit, Reply, Stop, Truncated, Usage, VERSION};
 use super::{
@@ -80,7 +80,9 @@ pub const INTERRUPT: &str =
     "{\"type\":\"control_request\",\"request_id\":\"tau-cancel-1\",\"request\":{\"subtype\":\"interrupt\"}}\n";
 
 /// The probe (ADR-0013 §6, §7): `claude --version` prints `2.1.272 (Claude
-/// Code)`; `claude auth status` prints JSON and exits 0 when signed in.
+/// Code)`; `claude auth status` prints JSON and exits 0 when signed in, and
+/// prints JSON with `"loggedIn": false` and exits 1 when not (#194 run 10;
+/// stderr empty either way). §6's exit-status rule is the verdict.
 ///
 /// `mode` is **not** read from the probe: it is `init.apiKeySource` from the
 /// run's own events (§2). The probe's document carries the user's email and
@@ -102,8 +104,14 @@ pub fn probe() -> Probe {
 /// `--safe-mode` because without it the user's hooks, plugins, skills and
 /// `CLAUDE.md` load, hook events precede `init`, and plugin text reached the
 /// envelope (#130 runs 1, 7). `--permission-prompts none` so that anything
-/// that would prompt is denied instead of hanging a headless run. No
-/// `--json-schema`: see the ADR's amendment for this lane.
+/// that would prompt is denied instead of hanging a headless run.
+/// `--json-schema` with the strict [`envelope::schema`]: the CLI adds a
+/// `StructuredOutput` tool the session calls with the envelope as its
+/// input, and the `result` then carries the envelope twice — as
+/// `structured_output`, an object, and as `result`, the same object
+/// serialised — so the final message is still the plain envelope text and
+/// the tolerant parser reads it unchanged (#194 run 8; the tool is not
+/// gated by `--allowedTools`).
 #[must_use]
 pub fn invocation(config: &AgentConfig, accepted: &Accepted) -> Invocation {
     let mut args: Vec<String> = [
@@ -116,10 +124,12 @@ pub fn invocation(config: &AgentConfig, accepted: &Accepted) -> Invocation {
         "--verbose",
         "--permission-prompts",
         "none",
+        "--json-schema",
     ]
     .into_iter()
     .map(str::to_owned)
     .collect();
+    args.push(envelope::schema().to_string());
     if let Some(permission) = &config.permission {
         args.push("--permission-mode".to_owned());
         args.push(permission.clone());
@@ -208,8 +218,8 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 /// | `model` | `init.model`, verbatim (`claude-opus-5[1m]`) |
 /// | `mode` | `init.apiKeySource`, verbatim (`"none"` on a claude.ai login) |
 /// | `usage` | `result.usage`: every input class summed, `total_cost_usd` in microdollars rounded up, `num_turns` |
-/// | `final_message` | `result.result`, when it is a string |
-/// | `stop` | `None` on `success`; a `limit` on `max_turns` or a budget subtype; an error kind on any other `is_error` |
+/// | `final_message` | `result.result`, when it is a string — under `--json-schema` that is the envelope serialised, the same object as `result.structured_output` (#194 run 8) |
+/// | `stop` | `None` on `success` without `is_error`; a `limit` on `max_turns` or `error_max_budget_usd`; `unavailable` on the logged-out `result`; an error kind on any other `is_error` |
 ///
 /// A run whose terminal event never arrived gets `stop: None` and whatever
 /// the `init` said; the shared `settle` reports `error.lost` and bills the
@@ -306,25 +316,30 @@ fn stop(result: &Value, transcript: &[Value]) -> Option<Stop> {
         .and_then(Value::as_str)
         .unwrap_or("");
     let is_error = result.get("is_error").and_then(Value::as_bool) == Some(true);
+    // `subtype: success` alone is not a success: the logged-out run says
+    // `success` with `is_error: true` (#194 run 11).
     if !is_error && subtype == "success" {
         return None;
     }
     // #130 run 6: `subtype: error_max_turns`, `terminal_reason: max_turns`.
-    if reason == "max_turns" || subtype.contains("max_turns") {
+    if subtype == "error_max_turns" || reason == "max_turns" {
         return Some(Stop::Limit(Limit::Turns));
     }
-    // *#127*: the budget row is read by name, not pinned (see the ADR's
-    // amendment).
-    if reason.contains("budget") || subtype.contains("budget") {
+    // #194 run 9: `subtype: error_max_budget_usd`, `terminal_reason:
+    // budget_exhausted`, `errors: ["Reached maximum budget ($0.001)"]`,
+    // `result: null`, `total_cost_usd` the cap itself.
+    if subtype == "error_max_budget_usd" || reason == "budget_exhausted" {
         return Some(Stop::Limit(Limit::Cost));
     }
     let said = said(result);
     let status = result.get("api_error_status").and_then(Value::as_u64);
-    let lowered = said.to_ascii_lowercase();
-    if matches!(status, Some(401 | 403)) || names_auth(&lowered) {
+    if matches!(status, Some(401 | 403))
+        || said == NOT_LOGGED_IN
+        || authentication_failed(transcript)
+    {
         return Some(Stop::Error(refusal(ErrorKind::Unavailable, said)));
     }
-    if status == Some(429) || names_rate_limit(&lowered) || rate_limited(transcript) {
+    if status == Some(429) || rate_limited(transcript) {
         return Some(Stop::Error(refusal(ErrorKind::Throttled, said)));
     }
     if !is_error {
@@ -364,41 +379,26 @@ fn said(result: &Value) -> String {
     }
 }
 
-/// *#127*: the words a logged-out `claude` is expected to use. Unpinned;
-/// read tolerantly.
-fn names_auth(lowered: &str) -> bool {
-    [
-        "not logged in",
-        "not authenticated",
-        "unauthenticated",
-        "authentication",
-        "unauthorized",
-        "invalid api key",
-        "invalid authentication",
-        "oauth token",
-        "please log in",
-        "please run /login",
-    ]
-    .iter()
-    .any(|needle| lowered.contains(needle))
+/// What a logged-out `claude -p` puts in `result.result` (#194 run 11),
+/// with `subtype: success`, `is_error: true`, `terminal_reason: api_error`,
+/// `api_error_status: null`, no `errors[]`, zero usage, exit 1. The
+/// `assistant` event before it is the same text from `model: <synthetic>`,
+/// marked `error: authentication_failed`.
+pub const NOT_LOGGED_IN: &str = "Not logged in · Please run /login";
+
+/// An `assistant` event the CLI synthesised for an authentication failure
+/// (#194 run 11): `error: authentication_failed` at the event's top level.
+fn authentication_failed(transcript: &[Value]) -> bool {
+    transcript
+        .iter()
+        .filter(|event| event["type"] == "assistant")
+        .any(|event| event["error"] == "authentication_failed")
 }
 
-/// *#127*: the words a rate limit is expected to use. Unpinned; read
-/// tolerantly.
-fn names_rate_limit(lowered: &str) -> bool {
-    [
-        "rate limit",
-        "rate_limit",
-        "too many requests",
-        "quota",
-        "overloaded",
-    ]
-    .iter()
-    .any(|needle| lowered.contains(needle))
-}
-
-/// A `rate_limit_event` whose `status` is not `allowed` (#130 saw only
-/// `allowed`, on every run).
+/// A `rate_limit_event` whose `status` is not `allowed` (#130 and #194 saw
+/// only `allowed`, on every run: the rate-limit row is the one still
+/// unpinned, and it is read from this field and `api_error_status`, never
+/// from words).
 fn rate_limited(transcript: &[Value]) -> bool {
     transcript
         .iter()

@@ -571,7 +571,7 @@ fills in a column before it ships.
 | `provider` | any other `result` with `is_error` | any other terminal `error` |
 | interrupt (§5, first rung) | `{"type":"control_request","request_id":"<id>","request":{"subtype":"interrupt"}}` on stdin (`init.capabilities` lists `interrupt_receipt_v1`); `control_response` acknowledges | `SIGINT` to the group — `exec` has no in-band channel |
 | after `SIGTERM` | nothing printed, exit 143, no `result` (#130 §5c) | *#128* |
-| environment | exactly `config.env` — `HOME` so the CLI finds its own login, `PATH` if the binary path is not absolute, and any key the harness *chooses* to pass | same |
+| environment | exactly `config.env` — `HOME` so the CLI finds its own login (and `USER` on macOS, where the Keychain lookup keys on it: 2026-09-26 amendment), `PATH` if the binary path is not absolute, and any key the harness *chooses* to pass | same |
 | transcript | one JSON value per stdout line; kinds seen: `system/{hook_started,hook_response,session_state_changed,init}`, `rate_limit_event`, `assistant`, `user`, `control_response`, `result` | one JSON value per stdout line (`--json`): `thread.started`, `turn.started`, `error`, and *#128* for the rest |
 
 Both columns share one rule for the environment: **nothing is inherited**.
@@ -915,3 +915,54 @@ neighbour for.
   `touch`, a readiness marker written after its signal handlers are
   installed, so that those rows do not race the binary's start-up under
   load — the shape of [#182](https://github.com/tau-rs/tau/issues/182).
+- **2026-09-26, later** — [#194](https://github.com/tau-rs/tau/issues/194)
+  ran the four rows the amendment above left tolerant, on `claude` 2.1.272
+  on a logged-in laptop, and recorded them as runs 8–11 beside #130's
+  seven. Each row of §7 now reads as follows; the adapter matches these
+  strings and no others.
+  - **envelope enforcement** — `--json-schema <envelope::schema()>` is
+    **on**, in the fixed argv. The CLI adds a `StructuredOutput` tool to
+    the session (it is not gated by `--allowedTools`), the session calls it
+    with the envelope as the tool's input, and the `result` carries the
+    envelope twice: as `structured_output`, an object, and as `result`, the
+    same object serialised. The final message is therefore still the plain
+    envelope text, which is the condition the row set, and the tolerant
+    parser reads it unchanged. `stop_reason` is `tool_use` on such a run,
+    `terminal_reason` `completed`, `num_turns` one more than without the
+    flag (run 8).
+  - **`budget.cost_microusd` exhaustion** — `subtype: error_max_budget_usd`,
+    `terminal_reason: budget_exhausted`, `errors: ["Reached maximum budget
+    ($0.001)"]`, `result: null`, `is_error: true`, exit 1, and
+    `total_cost_usd` is **the cap itself** with every usage count zero
+    (run 9): the CLI reports the bound it hit, not what the aborted call
+    spent. `{ "limit": "cost" }`, billed at the cap.
+  - **login probe** — `claude auth status` while logged out is exit 1 with
+    the same JSON document on stdout and `"loggedIn": false` in it; stderr
+    is empty; `--text` says `Not logged in. Run claude auth login to
+    authenticate.` (run 10). §6's exit-status rule holds unchanged. One
+    honest consequence: the unavailable message carries that document, so
+    a logged-out reply names the CLI's config paths; it names no identity,
+    because a logged-out document has none.
+  - **`unavailable` at run time** — a logged-out `claude -p` prints an
+    `init`, then an `assistant` event from `model: "<synthetic>"` carrying
+    `error: "authentication_failed"` and the text `Not logged in · Please
+    run /login`, then a `result` with **`subtype: success`**, `is_error:
+    true`, `terminal_reason: api_error`, `api_error_status: null`, no
+    `errors[]`, that text in `result`, zero usage and cost, exit 1 (run
+    11). The adapter reads the assistant event's `error` field, the pinned
+    text, or `api_error_status` 401/403; the word list is gone. `subtype`
+    alone never decides a success: `is_error` does.
+  - **`throttled`** — unreached, on purpose: #194 did not spend a
+    five-hour window to see one. The row stays on the two structured
+    fields the CLI has for it, `api_error_status` 429 and a
+    `rate_limit_event` whose `status` is not `allowed`; the word list is
+    gone, so an `errors[]` entry that merely mentions a rate limit is
+    `provider` with the text, and the drift job (§10) pins the row the day
+    a transcript reaches it. Every run so far, #130's and #194's, saw
+    `rate_limit_event.status: allowed`.
+  - **environment** — on macOS the `claude` login is a Keychain item whose
+    lookup keys on `USER`: with `HOME` and `PATH` alone a logged-in laptop
+    reads as logged out, at the probe and at the run. `USER` joins `HOME`
+    in the list the harness passes (§7's environment row, and the
+    obligations under Consequences), which is still the CLI reading its
+    own store and not the driver reading it.

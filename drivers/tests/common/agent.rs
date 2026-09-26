@@ -280,7 +280,8 @@ pub(crate) const ARGV_VAR: &str = "TAU_TEST_ARGV";
 /// both the way #130 recorded them and `exec`s the fake for everything
 /// else, recording the argv it was given. `TAU_TEST_LOGIN` names a marker
 /// file: present, the stub is logged in (exit 0, the JSON #130 saw, minus
-/// the email); absent, it is logged out (exit 1, a line on stderr).
+/// the email); absent, it is logged out the way #194 run 10 recorded it
+/// (exit 1, JSON with `loggedIn: false` on stdout, nothing on stderr).
 pub(crate) struct ClaudeStub {
     pub(crate) binary: PathBuf,
     pub(crate) login: PathBuf,
@@ -301,7 +302,7 @@ impl ClaudeStub {
                    echo '{{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\"}}'\n\
                    exit 0\n\
                  fi\n\
-                 echo 'Not logged in. Run `claude auth login` first.' >&2\n\
+                 echo '{{\"loggedIn\":false,\"authMethod\":\"none\",\"apiProvider\":\"firstParty\"}}'\n\
                  exit 1 ;;\n\
              esac\n\
              printf '%s\\0' \"$@\" > \"${ARGV_VAR}\"\n\

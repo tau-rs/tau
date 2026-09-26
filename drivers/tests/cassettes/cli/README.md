@@ -10,7 +10,15 @@ every run.
 
 `claude-2.1.272/` is the seven runs of
 [#130](https://github.com/tau-rs/tau/issues/130), recorded on 2026-09-16
-by the runner script in that issue's gist, converted by hand once. There
+by the runner script in that issue's gist, converted by hand once, plus
+runs 8–11 of [#194](https://github.com/tau-rs/tau/issues/194), recorded
+on 2026-09-26 with the driver's own fixed argv (`--safe-mode`,
+`--permission-prompts none`, the v1 contract) under an environment of
+exactly `HOME`, `PATH` and `USER` — `USER` because the CLI's Keychain
+lookup on macOS keys on it, and without it a logged-in laptop reads as
+logged out. Runs 10 and 11 ran under a throwaway `HOME` with no login.
+Run 10 is `claude auth status`, not a print run: its one `stdout` record
+holds the pretty-printed document as one object, and `cut` says so. There
 is no `codex` transcript: #130's machine had no `codex` login, so #128
 begins by recording one on a machine that does.
 
