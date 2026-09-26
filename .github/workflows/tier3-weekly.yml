@@ -225,10 +225,14 @@ jobs:
           done < unused.tsv
 
   # rustdoc under `-D warnings` catches what the compiler does not: a
-  # broken intra-doc link, a missing code-block language. Then lychee over
-  # the Markdown, external links included; 429 is accepted because a
-  # rate-limited host is not a dead link, and GitHub links carry the token
-  # for the same reason.
+  # broken intra-doc link, a missing code-block language. Private items are
+  # documented too: the module docs are what a maintainer reads, the
+  # workspace `[lints.rustdoc]` table keeps their private links for that
+  # rendering (#228), and a link that is only ambiguous once the private
+  # module beside it is documented (#229) is drift nothing else runs into.
+  # Then lychee over the Markdown, external links included; 429 is
+  # accepted because a rate-limited host is not a dead link, and GitHub
+  # links carry the token for the same reason.
   docs:
     name: docs (rustdoc -D warnings, lychee)
     runs-on: ubuntu-latest
@@ -249,7 +253,7 @@ jobs:
           set -euo pipefail
           SECONDS=0
           rc=0
-          cargo doc --locked --workspace --all-features --no-deps 2>&1 | sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' | tee rustdoc.log || rc=$?
+          cargo doc --locked --workspace --all-features --no-deps --document-private-items 2>&1 | sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' | tee rustdoc.log || rc=$?
           echo "- rustdoc: $([ "$rc" -eq 0 ] && echo ok || echo "failed (exit $rc)"); ${SECONDS}s" >> "$GITHUB_STEP_SUMMARY"
           if [ "$rc" -ne 0 ]; then
             first="$(grep -nE '^(error|warning)' rustdoc.log | head -1 | cut -d: -f1)"

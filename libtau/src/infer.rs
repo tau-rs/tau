@@ -160,7 +160,7 @@ pub struct RetryPolicy {
 
 impl RetryPolicy {
     /// No retries. The default, and what [`infer`] and
-    /// [`tool_loop`](crate::tool_loop) use.
+    /// [`tool_loop`](fn@crate::tool_loop) use.
     pub const NONE: Self = Self {
         retries: 0,
         backoff: Duration::ZERO,

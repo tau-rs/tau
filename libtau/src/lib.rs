@@ -29,7 +29,7 @@
 //!
 //! # What is here
 //!
-//! - [`infer`]: one model call. Encode, `send`, `recv` on the correlation
+//! - [`fn@infer`]: one model call. Encode, `send`, `recv` on the correlation
 //!   (or the cancel notice that pre-empts it), `read`, decode. Nothing here
 //!   reads `abi` off a delivered envelope: that stamp is the handing-over
 //!   build's and a replay from a snapshot does not preserve it (ADR-0011
@@ -44,7 +44,7 @@
 //! - [`Toolbox`]: the projected namespace. One tool per capability, named
 //!   by the `DriverId` the harness registered the driver under, with the
 //!   driver's schema compiled for validation.
-//! - [`tool_loop`] and [`tool_loop_with`]: the loop of HANDOFF §3.2. Every
+//! - [`fn@tool_loop`] and [`tool_loop_with`]: the loop of HANDOFF §3.2. Every
 //!   failure short of a budget refusal is fed back to the model as a
 //!   `tool_result`, so it can self-correct.
 //!
