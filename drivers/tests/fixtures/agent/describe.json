@@ -1,9 +1,9 @@
 {
   "description": "Delegate a whole task to a Claude Code session in the shared workspace. It runs headless with tools Read, Edit and Bash, may spend up to $2 (400k tokens, 40 turns) per call, and answers with a JSON report: status, summary, artifacts, assumptions, events. Pass `session` from a previous report to continue it.",
   "input_schema": {
-    "additionalProperties": false,
     "oneOf": [
       {
+        "additionalProperties": false,
         "properties": {
           "budget": {
             "additionalProperties": false,
@@ -65,6 +65,7 @@
         ]
       },
       {
+        "additionalProperties": false,
         "properties": {
           "op": {
             "const": "resume",
