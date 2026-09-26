@@ -207,12 +207,16 @@ fn strict(value: &mut Value) {
 ///
 /// `-a never` goes **before** the subcommand: `exec --ask-for-approval` is
 /// rejected (#130). Everything else is `exec`'s own: `--json` for the
-/// event stream, `--output-schema` for the strict envelope, and
+/// event stream, `--output-schema` for the strict envelope,
 /// `--skip-git-repo-check` because a workspace is not necessarily a
-/// checkout. On a `run`, the sandbox (config's `permission`), `--cd`, the
-/// model and the effort follow; on a `resume`, only `resume <session>`
-/// does, exactly as `4-resume` recorded it. No `-o`: the envelope is read
-/// from the event stream, where it is anyway.
+/// checkout, and `--ignore-user-config` so the user's own
+/// `~/.codex/config.toml` — MCP servers, profiles, instructions — stays out
+/// of a headless run while the login under the same home is still read
+/// (`8-hello-ignore-user-config`: the same task at 26,954 input tokens
+/// instead of 71,179). On a `run`, the sandbox (config's `permission`),
+/// `--cd`, the model and the effort follow; on a `resume`, only `resume
+/// <session>` does. No `-o`: the envelope is read from the event stream,
+/// where it is anyway.
 #[must_use]
 pub fn invocation(config: &AgentConfig, accepted: &Accepted, schema: &Path) -> Invocation {
     let mut args: Vec<String> = [
@@ -223,6 +227,7 @@ pub fn invocation(config: &AgentConfig, accepted: &Accepted, schema: &Path) -> I
         "--output-schema",
         &schema.display().to_string(),
         "--skip-git-repo-check",
+        "--ignore-user-config",
     ]
     .into_iter()
     .map(str::to_owned)

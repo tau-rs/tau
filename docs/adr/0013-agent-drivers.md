@@ -960,17 +960,21 @@ neighbour for.
     interrupt, which is also every probe. `claude`'s invocation, which
     writes its task on stdin, is unchanged.
   - **The fixed argv** is `codex -a never exec --json --output-schema
-    <file> --skip-git-repo-check`, then on a `run` `--sandbox <config
-    permission>` `--cd <workspace>` `-m <config model>` `-c
-    model_reasoning_effort=<config effort>` and the prompt (`<contract>\n\n<task>`),
-    and on a `resume` only `resume <session> "<amendment>"`, exactly as
-    recorded. `-m` was parsed live; `-c model_reasoning_effort` was not
-    exercised (the ChatGPT account serves one model) and is a drift-job
-    row. No isolation flag exists at this pin: the child reads
-    `$HOME/.codex/config.toml` and the workspace's `AGENTS.md`, and a
-    harness that wants a clean configuration points `HOME` at a home that
-    holds only a login. The "why `--safe-mode`" row's *#128* is pinned as
-    that sentence.
+    <file> --skip-git-repo-check --ignore-user-config`, then on a `run`
+    `--sandbox <config permission>` `--cd <workspace>` `-m <config model>`
+    `-c model_reasoning_effort=<config effort>` and the prompt
+    (`<contract>\n\n<task>`), and on a `resume` only `resume <session>
+    "<amendment>"`. `-m` was parsed live; `-c model_reasoning_effort` was
+    not exercised (the ChatGPT account serves one model) and is a
+    drift-job row. **`--ignore-user-config` is the isolation** the "why
+    `--safe-mode`" row left to this lane: the user's `~/.codex/config.toml`
+    — MCP servers, profiles, instructions — stays out of the run while the
+    login under the same home is still read (`8-hello-ignore-user-config`:
+    the same task at 26,954 input tokens instead of `1-hello`'s 71,179).
+    `exec resume` lists the flag too, and it parsed live before `resume`.
+    Never `--ephemeral`: `resume` needs the thread on disk. The
+    workspace's `AGENTS.md` is still read; that is the workspace's own
+    instruction file, the harness's to write.
   - **The event stream** at 0.154.0 is `thread.started { thread_id }`,
     `turn.started`, `item.started` / `item.completed` with an `item` of
     type `agent_message { text }`, `command_execution { command,
@@ -1004,7 +1008,7 @@ neighbour for.
     ceiling, §5's third row. **After `SIGTERM`**: nothing, exit 143
     (`3-sigterm`). The *#128* rows for both are pinned as that.
 
-  Every row is tested against the seven committed transcripts, with the
+  Every row is tested against the eight committed transcripts, with the
   rows that wait on a grace period in the `ci` profile
   (`agent_codex_ladder`). `tau-fake-cli`'s `touch` directive (#127) is
   what those rows wait on. The `Cli` trait of the 2026-09-20 amendment is

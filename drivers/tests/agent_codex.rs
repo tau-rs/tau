@@ -1,5 +1,5 @@
 //! The `codex` adapter (ADR-0013 §7, the `codex` column at 0.154.0):
-//! the argv, the event mapping over the seven #128 transcripts, the strict
+//! the argv, the event mapping over the eight #128 transcripts, the strict
 //! schema projection against its fixture, and one test per row of the
 //! `stop` table, the `error.kind` table, and the ladder rows that do not
 //! wait on a grace period — each through `CodexDriver` over `tau-fake-cli`
@@ -218,7 +218,7 @@ fn the_run_argv_is_the_pinned_surface_with_the_contract_in_front_of_the_task() {
     };
     let schema = dir.path().join("schema.json");
     let invocation = codex::invocation(&config, &accepted, &schema);
-    let recorded = agent::transcript(PIN, "1-hello");
+    let recorded = agent::transcript(PIN, "8-hello-ignore-user-config");
     let recorded_argv: Vec<&str> = recorded[0]["argv"]
         .as_array()
         .unwrap()
@@ -229,7 +229,7 @@ fn the_run_argv_is_the_pinned_surface_with_the_contract_in_front_of_the_task() {
     // `-a never` before the subcommand, then exec's own flags.
     assert_eq!(recorded_argv[1..5], ["-a", "never", "exec", "--json"]);
     assert_eq!(
-        invocation.args[..7],
+        invocation.args[..8],
         [
             "-a",
             "never",
@@ -238,18 +238,22 @@ fn the_run_argv_is_the_pinned_surface_with_the_contract_in_front_of_the_task() {
             "--output-schema",
             &schema.display().to_string(),
             "--skip-git-repo-check",
+            "--ignore-user-config",
         ]
     );
-    assert_eq!(recorded_argv[7], "--skip-git-repo-check");
-    assert_eq!(recorded_argv[8..10], ["--sandbox", "workspace-write"]);
-    assert_eq!(invocation.args[7..9], ["--sandbox", "workspace-write"]);
-    assert_eq!(recorded_argv[10], "--cd");
     assert_eq!(
-        invocation.args[9..11],
+        recorded_argv[7..9],
+        ["--skip-git-repo-check", "--ignore-user-config"]
+    );
+    assert_eq!(recorded_argv[9..11], ["--sandbox", "workspace-write"]);
+    assert_eq!(invocation.args[8..10], ["--sandbox", "workspace-write"]);
+    assert_eq!(recorded_argv[11], "--cd");
+    assert_eq!(
+        invocation.args[10..12],
         ["--cd", &dir.path().join("ws").display().to_string()]
     );
     assert_eq!(
-        invocation.args[11..15],
+        invocation.args[12..16],
         ["-m", "gpt-5.5", "-c", "model_reasoning_effort=high"]
     );
     let prompt = invocation.args.last().unwrap();
@@ -262,7 +266,7 @@ fn the_run_argv_is_the_pinned_surface_with_the_contract_in_front_of_the_task() {
         CONTRACT.contains("v1") && !CONTRACT.contains("stdin"),
         "versioned with the wire; nothing is ever written on stdin"
     );
-    assert_eq!(invocation.args.len(), 16);
+    assert_eq!(invocation.args.len(), 17);
     assert_eq!(invocation.cwd, dir.path().join("ws"));
     assert_eq!(
         invocation.env, config.env,
@@ -305,13 +309,15 @@ fn the_resume_argv_is_the_json_flags_then_resume_session_and_the_amendment_alone
             "--output-schema",
             "s.json",
             "--skip-git-repo-check",
+            "--ignore-user-config",
             "resume",
             HELLO_THREAD,
             "Also write bye.txt containing bye",
         ]
     );
     // As recorded: no sandbox, no `--cd`, no model, no contract — the
-    // thread has them.
+    // thread has them. (`--ignore-user-config` was pinned after this run;
+    // `exec resume --help` lists it, and it parsed live before `resume`.)
     assert_eq!(
         recorded_argv[8..],
         ["resume", HELLO_THREAD, "Also write bye.txt containing bye"]
@@ -562,7 +568,7 @@ async fn resume_is_served_and_continues_the_named_thread() {
     assert_eq!(consumed.get(&DimKey::Tokens), Some(119_001 + 764));
     let argv = stub.argv();
     assert_eq!(
-        argv[7..],
+        argv[8..],
         ["resume", HELLO_THREAD, "Also write bye.txt containing bye"]
     );
 }
