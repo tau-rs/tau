@@ -282,6 +282,14 @@ pub(crate) const ARGV_VAR: &str = "TAU_TEST_ARGV";
 /// file: present, the stub is logged in (exit 0, the JSON #130 saw, minus
 /// the email); absent, it is logged out the way #194 run 10 recorded it
 /// (exit 1, JSON with `loggedIn: false` on stdout, nothing on stderr).
+///
+/// The executable is one file for every test that asks for it, under
+/// `target/tmp`; only the marker, probe and argv files are the test's own.
+/// macOS checks an executable the first time it runs and remembers the
+/// verdict per file: 0.1 s idle, a second under load, and serialised
+/// across processes. Twenty-odd tests each writing their own copy paid
+/// that check twenty-odd times over, in a queue, and the last in line sat
+/// against the quick profile's ceiling (#214). One file pays it once.
 pub(crate) struct ClaudeStub {
     pub(crate) binary: PathBuf,
     pub(crate) login: PathBuf,
@@ -290,29 +298,11 @@ pub(crate) struct ClaudeStub {
 }
 
 impl ClaudeStub {
+    /// The stub over `tau-fake-cli`, with its marker, probe and argv files
+    /// under `dir`.
     pub(crate) fn new(dir: &Path) -> Self {
-        let binary = dir.join("claude");
-        let body = format!(
-            "#!/bin/sh\n\
-             case \"$1\" in\n\
-               --version) echo \"2.1.272 (Claude Code)\"; exit 0 ;;\n\
-               auth)\n\
-                 printf . >> \"${PROBES_VAR}\"\n\
-                 if [ -f \"${LOGIN_VAR}\" ]; then\n\
-                   echo '{{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\"}}'\n\
-                   exit 0\n\
-                 fi\n\
-                 echo '{{\"loggedIn\":false,\"authMethod\":\"none\",\"apiProvider\":\"firstParty\"}}'\n\
-                 exit 1 ;;\n\
-             esac\n\
-             printf '%s\\0' \"$@\" > \"${ARGV_VAR}\"\n\
-             exec \"{fake}\" \"$@\"\n",
-            fake = FAKE_CLI,
-        );
-        std::fs::write(&binary, body).unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         Self {
-            binary,
+            binary: shared_stub(),
             login: dir.join("logged-in"),
             probes: dir.join("probes"),
             argv: dir.join("argv"),
@@ -366,6 +356,45 @@ impl ClaudeStub {
             .push((ARGV_VAR.to_owned(), self.argv.display().to_string()));
         config
     }
+}
+
+/// The one stub executable of this target directory, written on first use
+/// and reused by every later test and run: `target/tmp/claude-stub/claude`.
+///
+/// Reused only when its bytes are exactly the ones this build would write
+/// (the body names the fake by absolute path), so a stale file from an
+/// earlier checkout cannot answer for the current one. A replacement lands
+/// by rename, so a test spawning it meanwhile sees a whole file, old or
+/// new; two tests racing to write it write the same bytes.
+fn shared_stub() -> PathBuf {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("claude-stub");
+    let binary = dir.join("claude");
+    let body = format!(
+        "#!/bin/sh\n\
+         case \"$1\" in\n\
+           --version) echo \"2.1.272 (Claude Code)\"; exit 0 ;;\n\
+           auth)\n\
+             printf . >> \"${PROBES_VAR}\"\n\
+             if [ -f \"${LOGIN_VAR}\" ]; then\n\
+               echo '{{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\"}}'\n\
+               exit 0\n\
+             fi\n\
+             echo '{{\"loggedIn\":false,\"authMethod\":\"none\",\"apiProvider\":\"firstParty\"}}'\n\
+             exit 1 ;;\n\
+         esac\n\
+         printf '%s\\0' \"$@\" > \"${ARGV_VAR}\"\n\
+         exec \"{fake}\" \"$@\"\n",
+        fake = FAKE_CLI,
+    );
+    if std::fs::read_to_string(&binary).is_ok_and(|current| current == body) {
+        return binary;
+    }
+    std::fs::create_dir_all(&dir).unwrap();
+    let staged = dir.join(format!("claude.{}.tmp", std::process::id()));
+    std::fs::write(&staged, body).unwrap();
+    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::rename(&staged, &binary).unwrap();
+    binary
 }
 
 /// Polls until `path` exists, or about five seconds pass.
