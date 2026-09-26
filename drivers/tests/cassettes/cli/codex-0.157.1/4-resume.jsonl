@@ -1,0 +1,7 @@
+{"tau":"header","v":1,"cli":"codex","version":"0.157.1","recorded_at":"2026-09-26","run":"4-resume","source":"#128 §4: exec resume of run 1's thread with an amendment, the recipe's argv: no sandbox flag on resume, so the CLI ran read-only and the envelope says failed","argv":["codex","-a","never","exec","resume","01a0dd5a-ff32-7853-90d2-7362de945134","--json","--output-schema","drivers/tests/fixtures/agent/envelope-schema.json","--skip-git-repo-check","Also write bye.txt containing bye"],"scrubbed":["argv: the --output-schema path made repo-relative"]}
+{"tau":"stdin_closed"}
+{"tau":"stdout","at_ms":800,"line":{"type":"thread.started","thread_id":"01a0dd5a-ff32-7853-90d2-7362de945134"}}
+{"tau":"stdout","at_ms":800,"line":{"type":"turn.started"}}
+{"tau":"stdout","at_ms":7160,"line":{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{\"artifacts\":[],\"assumptions\":[],\"error\":\"Cannot write bye.txt because the workspace is read-only.\",\"events\":[],\"status\":\"failed\",\"summary\":\"The requested file was not created; filesystem permissions allow reads only.\"}"}}}
+{"tau":"stdout","at_ms":7180,"line":{"type":"turn.completed","usage":{"input_tokens":42140,"cached_input_tokens":26112,"cache_write_input_tokens":0,"output_tokens":222,"reasoning_output_tokens":42}}}
+{"tau":"exit","code":0,"elapsed_ms":7520,"stderr":"","files":{}}

@@ -538,41 +538,45 @@ reports "not authenticated" on its own (#130 §3).
 ### 7. Mapping: the wire, and each CLI at its pin
 
 Every unmarked row below was run by #130 on `claude` 2.1.272 and `codex`
-0.46.0. A row marked *#127* or *#128* is one the adapter lane pins from its
-own transcript, because #130 could not reach it (no `codex` login on the
-spike machine; `--json-schema` and `--max-budget-usd` exhaustion untested).
-This table is the ADR-0006 §6 obligation for this family; a CLI added later
-fills in a column before it ships.
+0.46.0, or by #128 on `codex` 0.157.1. A row marked *#127* or *#128* is one
+the adapter lane pins from its own transcript, because #130 could not reach
+it (no `codex` login on the spike machine; `--json-schema` and
+`--max-budget-usd` exhaustion untested). This table is the ADR-0006 §6
+obligation for this family; a CLI added later fills in a column before it
+ships. The `codex` column is at **0.157.1**: the 0.46.0 pin was refused
+every model for a ChatGPT login by the time #128 recorded (amendment
+2026-09-26), and the transcript that shows it is kept under
+`cassettes/cli/codex-0.46.0/`.
 
-| Wire | `claude` 2.1.272 | `codex` 0.46.0 |
+| Wire | `claude` 2.1.272 | `codex` 0.157.1 |
 |---|---|---|
-| binary, version pin | `claude --version` → `2.1.272 (Claude Code)` | `codex --version` → `codex-cli 0.46.0` |
-| login probe (§6) | `claude auth status`: JSON on stdout, exit 0 when signed in; `mode` is not read from here (§2) | `codex login status`: exit 0 signed in, exit 1 otherwise (stderr `Error checking login status: …`); the stdout line is `mode` |
-| fixed argv, every run | `-p --safe-mode --input-format stream-json --output-format stream-json --verbose --permission-prompts none --permission-mode <config>` | `-a never -s <config sandbox> -C <workspace> -m <config model> exec --json --skip-git-repo-check --output-schema <file> -o <file>` |
-| why `--safe-mode` | without it the user's hooks, plugins, skills and `CLAUDE.md` load; hook events precede `init` and plugin text reached the envelope (#130 runs 1, 7). `--bare` never reads OAuth, so it is not an option. | `codex` reads `~/.codex/config.toml` and the workspace's `AGENTS.md`; *#128* pins the isolation, likely `-c` overrides |
-| `op: run` | the task is the **first stdin message**, `{"type":"user","message":{"role":"user","content":"<task>"}}`; stdin stays open for the interrupt and is closed when the terminal event arrives | the task is the positional prompt, worker contract prepended |
-| `op: resume` | `--resume <session>`, the amendment as the first stdin message (#130 run 6) | `codex exec resume <session> "<amendment>"` — **`exec resume` lists none of `--json`, `--output-schema`, `-o`**, and `-C`/`-a`/`-s`/`-m` are top-level. Without a JSON stream the driver cannot read a terminal event, so `resume` at `codex` is **`error.unsupported` at 0.46.0**, and the codex `describe()` omits the op. *#128* re-checks when the pin moves. |
-| worker contract (§4) | `--append-system-prompt "<contract>"` — never `--system-prompt`, which strips the CLI's own scaffolding | no system-prompt flag in `exec`: prepended to the prompt |
-| envelope enforcement | `--json-schema <schema>` is listed; *#127* runs it once and keeps it only if the final message is still the plain envelope text | `--output-schema <file>`, the strict schema written to a scratch file; `-o <file>` gives the final message directly |
-| `workspace` | child `cwd` | `-C <dir>` (top-level) |
+| binary, version pin | `claude --version` → `2.1.272 (Claude Code)` | `codex --version` → `codex-cli 0.157.1` |
+| login probe (§6) | `claude auth status`: JSON on stdout, exit 0 when signed in; `mode` is not read from here (§2) | `codex login status`: exit 0 signed in, exit 1 otherwise (stderr `Error checking login status: …` at 0.46.0); the one line — `Logged in using ChatGPT` — is on **stderr**, stdout empty (#128 run 0), and is `mode` |
+| fixed argv, every run | `-p --safe-mode --input-format stream-json --output-format stream-json --verbose --permission-prompts none --permission-mode <config>` | `-a never exec --json --skip-git-repo-check --ignore-user-config --output-schema <file>`, then `--sandbox <config> --cd <workspace>` on `run` and `-c sandbox_mode="<config>"` on `resume`, then `-m <config model>` and `-c model_reasoning_effort="<config>"`, then the prompt. Flags go **after** `exec`: a top-level `-m` parses and is silently ignored (#128 probed it); `-a` is the one flag `exec` rejects and the top level takes. |
+| why `--safe-mode` | without it the user's hooks, plugins, skills and `CLAUDE.md` load; hook events precede `init` and plugin text reached the envelope (#130 runs 1, 7). `--bare` never reads OAuth, so it is not an option. | `--ignore-user-config`: `codex` reads `~/.codex/config.toml` — model, MCP servers, instructions — and this leaves it out while the login is read regardless (#128 run 7). Never `--ephemeral`: a `resume` needs the thread on disk. |
+| `op: run` | the task is the **first stdin message**, `{"type":"user","message":{"role":"user","content":"<task>"}}`; stdin stays open for the interrupt and is closed when the terminal event arrives | the task is the positional prompt, worker contract prepended, `Task:` between them (#128 run 1). stdin is a pipe the driver never writes; a non-tty stdin makes the CLI print `Reading additional input from stdin...` on stderr and append nothing. |
+| `op: resume` | `--resume <session>`, the amendment as the first stdin message (#130 run 6) | `exec resume <thread> --json --skip-git-repo-check --output-schema <file> -c sandbox_mode="…" "<amendment>"` — **at 0.46.0 `exec resume` had none of `--json`, `--output-schema`, `-o`**, so `resume` was `error.unsupported`; 0.157.1 lists them all (#128 run 4). `exec resume` still has **no `--sandbox` and no `--cd`**: without the `-c` override the recipe's resume ran read-only and the envelope said `failed` (run 4); a resumed thread works in the **child's `cwd`**, not the thread's original directory (run 5), so the driver spawns it in the workspace. |
+| worker contract (§4) | `--append-system-prompt "<contract>"` — never `--system-prompt`, which strips the CLI's own scaffolding | no system-prompt flag in `exec`: prepended to the prompt on `run`; the amendment alone on `resume`, the thread has the contract |
+| envelope enforcement | `--json-schema <schema>` is listed; *#127* runs it once and keeps it only if the final message is still the plain envelope text | `--output-schema <file>`, the strict schema written to a scratch file under the host's temporary directory, named by the corr, removed after the run. OpenAI's structured-output mode is strict all the way down: every nested object closed, `anyOf` never `oneOf` (#128 run 6; `envelope::schema()` does both). No `-o`: the final message is the last `agent_message` item, the same text. |
+| `workspace` | child `cwd` | `--cd <dir>` on `run`, the child's `cwd` on both |
 | `tools` | `--allowedTools <tools...>`, must ⊆ config | *no per-session allowlist*: a present `tools` is `error.unsupported`; the cage is `-s` in config |
 | headless permissions (config) | `--permission-mode <acceptEdits \| auto \| bypassPermissions \| manual \| dontAsk \| plan>` and `--permission-prompts none` (anything that would prompt is denied) | `-a never` **before the subcommand** (`exec --ask-for-approval` is rejected; `--full-auto` is `-a on-failure`, which can still block) and `-s <read-only \| workspace-write \| danger-full-access>` |
 | `budget.cost_microusd` | `--max-budget-usd <usd>`; exhaustion is `{ "limit": "cost" }` (*#127* pins the `result.subtype`) | *no flag*: `error.unsupported` |
 | `budget.turns` | `--max-turns <n>` — **absent from `--help`, accepted and enforced** (#130 run 6: `subtype: error_max_turns`, `terminal_reason: max_turns`, `result: null`, exit 1) → `{ "limit": "turns" }`. A hidden flag is a drift-job row (§10). | *no flag*: `error.unsupported` |
-| model (config) | `--model <model>` | `-m <model>` (top-level) |
-| effort (config) | `--effort <level>` | `-c model_reasoning_effort=<level>` — *#128* |
-| `session` | `init.session_id`. Not the first line: with hooks, `hook_started`/`hook_response`/`session_state_changed` precede it; the adapter takes the first `init`. | `thread.started`'s `thread_id`, the first line |
-| `mode` | `init.apiKeySource` (`"none"` on a claude.ai login) | the `codex login status` stdout line |
-| `model` (reply) | `init.model` (`claude-opus-5[1m]`) | *#128* |
-| terminal event | `result`: `subtype`, `is_error`, `terminal_reason` (`completed`, `max_turns`, `aborted_tools`, `aborted_streaming`), `num_turns`, `total_cost_usd`, `usage{input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens}`, `api_error_status`, `errors[]`, `result` (the final text) | *#128*: the turn-completed event and its usage |
-| `usage` | `result.usage` summed per §6; `total_cost_usd × 10⁶` → `cost_microusd`; `num_turns` → `turns` | *#128* |
-| `unavailable` at run time | a `result` whose `errors[]` or `api_error_status` names authentication — *#127* | an `error` event whose `message` contains `401 Unauthorized` (#130 §3): the adapter kills the child; the CLI retries five times and never stops on its own |
-| `throttled` | `result.api_error_status` 429, or a terminal `rate_limit_event` whose `status` is not `allowed` — *#127* pins the strings | an `error` event naming 429 or a quota window — *#128* |
-| `provider` | any other `result` with `is_error` | any other terminal `error` |
-| interrupt (§5, first rung) | `{"type":"control_request","request_id":"<id>","request":{"subtype":"interrupt"}}` on stdin (`init.capabilities` lists `interrupt_receipt_v1`); `control_response` acknowledges | `SIGINT` to the group — `exec` has no in-band channel |
-| after `SIGTERM` | nothing printed, exit 143, no `result` (#130 §5c) | *#128* |
+| model (config) | `--model <model>` | `exec -m <model>` — after the subcommand, never before |
+| effort (config) | `--effort <level>` | `exec -c model_reasoning_effort="<level>"`, a TOML string |
+| `session` | `init.session_id`. Not the first line: with hooks, `hook_started`/`hook_response`/`session_state_changed` precede it; the adapter takes the first `init`. | `thread.started`'s `thread_id`, the first line; a `resume` prints the same id first |
+| `mode` | `init.apiKeySource` (`"none"` on a claude.ai login) | the `codex login status` line, from stderr |
+| `model` (reply) | `init.model` (`claude-opus-5[1m]`) | **`null`**: no event names the model at 0.157.1 (the default was `gpt-6-luna` at recording; the driver does not guess) |
+| terminal event | `result`: `subtype`, `is_error`, `terminal_reason` (`completed`, `max_turns`, `aborted_tools`, `aborted_streaming`), `num_turns`, `total_cost_usd`, `usage{input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens}`, `api_error_status`, `errors[]`, `result` (the final text) | `turn.completed{usage{input_tokens, cached_input_tokens, cache_write_input_tokens, output_tokens, reasoning_output_tokens}}`, or `turn.failed{error{message}}`; the final text is the last `item.completed` whose `item.type` is `agent_message`, in `item.text` |
+| `usage` | `result.usage` summed per §6; `total_cost_usd × 10⁶` → `cost_microusd`; `num_turns` → `turns` | `input_tokens` and `output_tokens` **as stated**: `cached_input_tokens` and `reasoning_output_tokens` are subsets of them, not further classes, so nothing is summed. No cost stated, no turn count: both `null`. |
+| `unavailable` at run time | a `result` whose `errors[]` or `api_error_status` names authentication — *#127* | an `error` or `turn.failed` whose `message` names `401 Unauthorized` (#130 §3) or a login — *#128*, read by name. The unsigned loop never ends on its own; the probe (§6) is the gate, and the driver flips the verdict when a run's events name it. |
+| `throttled` | `result.api_error_status` 429, or a terminal `rate_limit_event` whose `status` is not `allowed` — *#127* pins the strings | a `turn.failed` naming 429, a rate limit, a quota or a usage limit — *#128*, read by name |
+| `provider` | any other `result` with `is_error` | any other `turn.failed`: a rejected model (0.46.0 run 1), a rejected schema (run 6), a backend 4xx/5xx; five `error` retries precede it |
+| interrupt (§5, first rung) | `{"type":"control_request","request_id":"<id>","request":{"subtype":"interrupt"}}` on stdin (`init.capabilities` lists `interrupt_receipt_v1`); `control_response` acknowledges | `SIGINT` to the group — `exec` has no in-band channel. **Nothing printed, exit 1, no terminal event** (#128 run 2): the first rung answers but reports nothing, so an abandoned `codex` run bills the ceiling. |
+| after `SIGTERM` | nothing printed, exit 143, no `result` (#130 §5c) | nothing printed, **exit 0**, no terminal event (#128 run 3) |
 | environment | exactly `config.env` — `HOME` so the CLI finds its own login (and `USER` on macOS, where the Keychain lookup keys on it: 2026-09-26 amendment), `PATH` if the binary path is not absolute, and any key the harness *chooses* to pass | same |
-| transcript | one JSON value per stdout line; kinds seen: `system/{hook_started,hook_response,session_state_changed,init}`, `rate_limit_event`, `assistant`, `user`, `control_response`, `result` | one JSON value per stdout line (`--json`): `thread.started`, `turn.started`, `error`, and *#128* for the rest |
+| transcript | one JSON value per stdout line; kinds seen: `system/{hook_started,hook_response,session_state_changed,init}`, `rate_limit_event`, `assistant`, `user`, `control_response`, `result` | one JSON value per stdout line (`--json`): `thread.started`, `turn.started`, `item.started`, `item.completed` (`item.type` `agent_message` or `command_execution`), `error`, `turn.completed`, `turn.failed` |
 
 Both columns share one rule for the environment: **nothing is inherited**.
 The child gets exactly what the harness listed at registration, as the
@@ -648,9 +652,9 @@ sentence; it cannot remove the bound from it (ADR-0009 §7's rule).
   the `init` event's `plugins`, `slash_commands` and `skills` lists and the
   hook-response bodies cut, because they are one user's machine, not the
   CLI's surface. They are the fixtures the parser and the event mapping are
-  tested against. There is no `codex` transcript yet: #130's machine had no
-  `codex` login, so **#128 begins by recording one** on a machine that does,
-  and stays gated until it has.
+  tested against. #130's machine had no `codex` login, so #128 began by
+  recording one on a machine that did: `codex-0.157.1/`, eight runs, and one
+  run on the 0.46.0 pin that shows why the pin moved.
 - **The fixtures**: the JSON in this ADR round-trips through the wire types
   byte-for-byte in value, under `drivers/tests/fixtures/agent/`, the
   ADR-0006 §8 rule.
@@ -679,8 +683,8 @@ Moving the pin is a PR that re-records the transcripts, updates the
 | steer a running task | one `send`, one reply; a second channel is a bypass invisible to the log | `resume` as a second `send` (§3); a steering op only if the bridge ever streams |
 | resume across a driver restart from the log alone | the session id lives in a reply blob; nothing reads it back | M4 log-level resume, with #122's health entries |
 | know the billing mode | the driver reports the one string the CLI stated and interprets nothing | the operator's eyes, and the docs |
-| bound cost or turns before the fact at `codex` | no flag at 0.46.0 | the wall bound and overdraft (#18); the flags, when the CLI grows them |
-| `resume` at `codex` | `exec resume` has no JSON stream at 0.46.0 | `error.unsupported`; #128 re-checks when the pin moves |
+| bound cost or turns before the fact at `codex` | no flag at 0.157.1 either | the wall bound and overdraft (#18); the flags, when the CLI grows them |
+| an abandoned `codex` run at the reported usage | `SIGINT` ends the run with nothing printed (#128 run 2) | the ceiling; an in-band channel, if `exec` ever grows one |
 | an envelope from a bound or an interrupt | the CLI ends the session before the model gets a turn (#130) | `resume` with "wind down and report" |
 | undo work an interrupt arrived too late for | a tool that landed before the interrupt stays landed (#130 run 5a) | the caller reads the transcript; a workspace it can discard |
 | configure MCP servers for the child | a second config surface to pin | additive config, v2 |
@@ -979,3 +983,50 @@ neighbour for.
     in the list the harness passes (§7's environment row, and the
     obligations under Consequences), which is still the CLI reading its
     own store and not the driver reading it.
+- **2026-09-26** — The `codex` column is implemented by
+  [#128](https://github.com/tau-rs/tau/issues/128) as
+  `tau_drivers::agent::codex` behind the feature `agent-codex`, on the same
+  seam as `claude`: `codex::invocation` builds the `process::Invocation`,
+  `codex::outcome` reads the `Outcome`, and `CodexDriver` is `impl Driver`
+  over decode → flights → run → settle. **The pin moved to 0.157.1.** On the
+  day of recording, 0.46.0 answered every model name with `400 … not
+  supported when using Codex with a ChatGPT account`, five retries, then
+  `turn.failed` — the version, not the account, was what the backend
+  refused — so the transcripts are at the current release, installed from
+  npm into a scratch prefix and sharing the machine's login. §7's `codex`
+  column is rewritten from those transcripts; the rows that moved, and one
+  fixture:
+  - **`resume` is served**, not `error.unsupported`: `exec resume` grew
+    `--json`, `--output-schema`, `-o` and `--skip-git-repo-check`. It has no
+    `--sandbox` and no `--cd`, so the cage travels as `-c
+    sandbox_mode="…"` and a resumed thread works in the child's `cwd` —
+    which is where the driver spawns it. Caps at `codex` are `{ tools:
+    false, budget: false, resume: true }`, and the `describe()` projection
+    offers both ops. §11's `resume` row is gone.
+  - **The login probe's line is on stderr**, stdout empty. `Probe` now
+    hands `mode_from_login` both streams (`LoginOutput`); the `claude`
+    adapter's `|_| None` is unchanged.
+  - **A top-level `-m` is silently ignored** by `exec`; every flag goes
+    after the subcommand except `-a`, which `exec` rejects and the top level
+    takes. The isolation row is `--ignore-user-config` (run 7); never
+    `--ephemeral`, because a `resume` needs the thread on disk.
+  - **`SIGINT` reports nothing**: exit 1, no terminal event, so an
+    abandoned `codex` run is the ceiling row of §5's table, not the
+    reported one. `SIGTERM` is silence and exit 0.
+  - **`usage` is not summed**: `cached_input_tokens` and
+    `reasoning_output_tokens` are subsets of `input_tokens` and
+    `output_tokens`, not further classes. No cost, no turn count.
+  - **`model` is `null`**: no `--json` event names it.
+  - **The envelope schema** (§4) was rejected twice by OpenAI's
+    structured-output mode — a nested object left open, then `oneOf` — so
+    `envelope::schema()` closes every object and spells enums `anyOf`. The
+    parser is unchanged. The `--output-last-message` file is not used: the
+    last `agent_message` item carries the same text.
+  - **`unavailable` and `throttled` at run time** are read by name (*#128*):
+    `401`, `unauthorized`, a login; `429`, a rate limit, a quota, a usage
+    limit. Neither was recorded (the machine stayed signed in and under its
+    limits), and the drift job (§10) pins them when it first sees one.
+
+  §1's `Cli` trait extraction (amendment 2026-09-20) waits on both
+  adapters being on `main`; until then `CONTRACT` is spelled once in each,
+  the same text.

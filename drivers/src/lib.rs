@@ -23,8 +23,9 @@
 //!   tool as a subprocess behind one `send`. A whole task goes in, the CLI
 //!   runs its own loop under its own login, and one JSON report comes back.
 //!   This crate ships the half both CLIs share; each CLI is a thin adapter
-//!   on top of it: [`agent::claude`] (feature `agent-claude`, on by
-//!   default) is Claude Code in print mode.
+//!   on top of it: [`agent::claude`] (feature `agent-claude`) is Claude Code
+//!   in print mode, [`agent::codex`] (feature `agent-codex`) is `codex exec`;
+//!   both on by default.
 
 #[cfg(all(feature = "agent", unix))]
 pub mod agent;
