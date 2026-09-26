@@ -1,0 +1,514 @@
+# Tier 3, the weekly set (docs/HANDOFF.md §8, #208). Sundays, on main.
+#
+# The nightly files (tier3.yml, tier3-fuzz.yml) watch for drift that can
+# arrive any day. These five are the checks whose answer changes slowly,
+# so a week is the right cadence and a night would be noise:
+#
+#   soak   the simulation at 10^7 events, refolded on the same build. Tier
+#          2 runs 10^6 on every kernel PR and refolds it on macOS; this is
+#          the endurance run, ten times longer, on one platform, because a
+#          10^7 log is gigabytes and an artifact that size is not a weekly.
+#   udeps  cargo-udeps on nightly: a dependency nothing uses is a compile
+#          cost every harness that embeds the kernel pays for nothing.
+#   docs   rustdoc under -D warnings (a broken intra-doc link is an error)
+#          and lychee over the Markdown: the ADRs are where the reasoning
+#          lives, and a link that rots takes the reasoning with it.
+#   sbom   cargo-cyclonedx for every workspace member, kept as an artifact:
+#          the licence and provenance answer for whoever asks, refreshed
+#          before they ask.
+#   msrv   the `rust-version` the manifests declare, installed and run: a
+#          declared floor nobody builds on is a promise nobody keeps.
+#
+# Each opens an issue rather than failing, as every Tier 3 job does: the
+# finding is not the committer's fault. Red is reserved for the job that
+# could not have checked, and every job has a floor (events folded, crates
+# scanned, links checked, components emitted, tests run) so an empty lane
+# cannot read green. The firings counter is shared with the nightlies.
+
+name: tier3-weekly
+
+on:
+  schedule:
+    # Sunday 05:41 UTC: an odd minute, away from the nightlies' slots and
+    # from the day boundary.
+    - cron: "41 5 * * 0"
+  workflow_dispatch:
+    inputs:
+      events:
+        description: Soak events to generate (the weekly runs 10^7).
+        default: "10000000"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tier3-weekly-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: -D warnings
+  SOAK_EVENTS: ${{ github.event.inputs.events || '10000000' }}
+  SOAK_SEED: 20260914
+  SOAK_FLOOR: 1000000
+  TESTS_FLOOR: 400
+  CRATES_FLOOR: 50
+  LINKS_FLOOR: 20
+  COMPONENTS_FLOOR: 100
+
+jobs:
+  # The generator's `--check-every` snapshots and `--max-live` bound are the
+  # tier2 defaults; only the count changes. `soak` refuses to write a hash
+  # its own refold did not reproduce, so its exit is the verdict.
+  soak:
+    name: soak (linux, 10^7 events)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      issues: write       # to file a determinism issue
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo build --locked --release -p tau-sim --bin soak
+      - name: Soak and refold on this build
+        id: soak
+        run: |
+          set -euo pipefail
+          mkdir -p soak
+          SECONDS=0
+          rc=0
+          ./target/release/soak soak \
+            --seed "$SOAK_SEED" --events "$SOAK_EVENTS" \
+            --log soak/log.jsonl --hash soak/hash.txt 2>&1 | tee soak/summary.txt || rc=$?
+          entries="$(sed -nE 's/.* entries=([0-9]+) .*/\1/p' soak/summary.txt | tail -1)"
+          {
+            echo "## soak (linux, 10^7)"
+            echo
+            echo "- $(rustc --version)"
+            echo "- ref: \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`; events requested: $SOAK_EVENTS, seed $SOAK_SEED"
+            echo "- $(tail -1 soak/summary.txt)"
+            echo "- wall (soak + same-build refold): ${SECONDS}s; log: $(du -h soak/log.jsonl 2>/dev/null | cut -f1 || echo 'none')"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" -eq 0 ]; then
+            if [ -z "$entries" ] || [ "$entries" -lt "$SOAK_FLOOR" ]; then
+              echo "::error::the soak passed with ${entries:-0} entries; the floor is $SOAK_FLOOR (an empty lane must not read green)"
+              exit 1
+            fi
+            echo "ok: $entries entries"
+            exit 0
+          fi
+          # The generator or the fold refusing an entry, or a refold that
+          # did not reproduce: a reducer finding either way, not tooling.
+          echo "finding=$(tail -1 soak/summary.txt)" >> "$GITHUB_OUTPUT"
+          echo "DRIFT $(tail -1 soak/summary.txt)"
+      - name: File the determinism issue
+        if: always() && steps.soak.outputs.finding != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FINDING: ${{ steps.soak.outputs.finding }}
+        run: |
+          set -euo pipefail
+          title="tier3: soak 10^7 did not refold — seed $SOAK_SEED"
+          existing="$(gh issue list --state open --limit 500 --json number,title \
+            | jq -r --arg t "$title" '.[] | select(.title == $t) | .number' | head -1)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Again on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`: \`$FINDING\`. Run: $RUN_URL"
+            echo "$title: already open as #$existing"
+            exit 0
+          fi
+          body="$(cat <<EOF
+          The weekly soak (\`tier3-weekly.yml\`) ran \`soak --seed $SOAK_SEED --events $SOAK_EVENTS\` on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\` and it did not end with a hash its own refold reproduced:
+
+          \`\`\`
+          $FINDING
+          \`\`\`
+
+          - run: $RUN_URL
+          - Tier 2's 10^6 soak passes on every kernel PR, so whatever this is needs more than a million events to show: a snapshot-restore boundary (ADR-0011 §5) that only the longer run crosses, or a generator path the shorter seed never reaches. Reproduce with \`cargo run --release -p tau-sim --bin soak -- soak --seed $SOAK_SEED --events $SOAK_EVENTS --log /tmp/soak.jsonl --hash /tmp/soak.hash\`.
+          - A refold that does not reproduce is a reducer nondeterminism, the class of bug ADR-0003 calls the most expensive kind. \`release-blocker\` until it is understood.
+
+          refs #208, #7
+          EOF
+          )"
+          url="$(gh issue create --title "$title" --label bug --label release-blocker --label status:ready --body "$body")"
+          echo "$title: opened $url"
+
+  # cargo-udeps needs nightly (it reads the compiler's save-analysis); the
+  # same nightly-beside-the-pin and cleared-RUSTFLAGS as tier2's fuzz job.
+  # `--output json` is parsed, not the prose: one issue per unused edge.
+  udeps:
+    name: unused dependencies (cargo-udeps)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write       # to file an issue per unused dependency
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install nightly beside the pinned toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install nightly --profile minimal
+          cargo +nightly --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: udeps
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-udeps
+      - name: Find unused dependencies
+        id: udeps
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          rc=0
+          cargo +nightly udeps --locked --workspace --all-targets --all-features --output json > udeps.json 2> udeps.err || rc=$?
+          if ! jq -e 'has("success")' udeps.json > /dev/null 2>&1; then
+            echo "::error::cargo-udeps did not produce its JSON (exit $rc); see udeps.err"
+            tail -30 udeps.err
+            exit 1
+          fi
+          # One line per unused edge: package, kind, dependency.
+          # shellcheck disable=SC2016 # $pkg is jq's, not the shell's
+          jq -r '.unused_deps // {} | to_entries[] | .key as $pkg | .value
+                 | (.normal // [] | map([$pkg, "normal", .])), (.development // [] | map([$pkg, "dev", .])), (.build // [] | map([$pkg, "build", .]))
+                 | .[] | @tsv' udeps.json | sed -E 's/^([^ ]+) v[^\t]*\t/\1\t/' > unused.tsv
+          n="$(wc -l < unused.tsv | tr -d ' ')"
+          echo "unused=$n" >> "$GITHUB_OUTPUT"
+          {
+            echo "## unused dependencies (cargo-udeps)"
+            echo
+            echo "- $(cargo +nightly --version); $(cargo udeps --version)"
+            echo "- ref: \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`"
+            echo "- unused edges: $n; wall: ${SECONDS}s"
+            echo
+            echo '```'
+            cat unused.tsv
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat unused.tsv
+      - name: File an issue per unused dependency
+        if: always() && steps.udeps.outputs.unused != '' && steps.udeps.outputs.unused != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          open="$(gh issue list --state open --limit 500 --json number,title)"
+          while IFS=$'\t' read -r pkg kind dep; do
+            title="tier3: unused dependency — $dep in $pkg"
+            existing="$(jq -r --arg t "$title" '.[] | select(.title == $t) | .number' <<<"$open" | head -1)"
+            if [ -n "$existing" ]; then
+              echo "$title: already open as #$existing"
+              gh issue comment "$existing" --body "Still unused on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`. Run: $RUN_URL"
+              continue
+            fi
+            body="$(cat <<EOF
+          The weekly \`cargo udeps\` (\`tier3-weekly.yml\`) found that \`$pkg\` declares \`$dep\` as a $kind dependency on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\` and nothing in it uses it.
+
+          - run: $RUN_URL
+          - The fix is a line removed from \`$pkg\`'s \`Cargo.toml\` (and a \`cargo update -p $dep\` if nothing else needs it, so the lockfile drops it too). If it is used behind a feature or a cfg cargo-udeps cannot see, \`[package.metadata.cargo-udeps.ignore]\` in that manifest names it and this issue.
+
+          refs #208, #7
+          EOF
+          )"
+            url="$(gh issue create --title "$title" --label status:ready --body "$body")"
+            echo "$title: opened $url"
+          done < unused.tsv
+
+  # rustdoc under `-D warnings` catches what the compiler does not: a
+  # broken intra-doc link, a missing code-block language. Then lychee over
+  # the Markdown, external links included; 429 is accepted because a
+  # rate-limited host is not a dead link, and GitHub links carry the token
+  # for the same reason.
+  docs:
+    name: docs (rustdoc -D warnings, lychee)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write       # to file a docs or links issue
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Build the docs
+        id: rustdoc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          rc=0
+          cargo doc --locked --workspace --all-features --no-deps 2>&1 | sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' | tee rustdoc.log || rc=$?
+          echo "- rustdoc: $([ "$rc" -eq 0 ] && echo ok || echo "failed (exit $rc)"); ${SECONDS}s" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" -ne 0 ]; then
+            first="$(grep -nE '^(error|warning)' rustdoc.log | head -1 | cut -d: -f1)"
+            sed -n "${first:-1},\$p" rustdoc.log | head -60 > rustdoc-excerpt.txt
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+            echo "DRIFT rustdoc"
+          fi
+      - name: Check the links in the Markdown
+        id: lychee
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: >-
+            --no-progress --accept 200..=204,429 --max-retries 2
+            --exclude-path target
+            'docs/**/*.md' 'corpus/README.md' 'drivers/tests/cassettes/MODELS.md' README.md CONTRIBUTING.md
+          format: json
+          output: lychee.json
+          fail: false
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Read the link report
+        id: links
+        run: |
+          set -euo pipefail
+          total="$(jq '.total' lychee.json)"
+          if [ -z "$total" ] || [ "$total" -lt "$LINKS_FLOOR" ]; then
+            echo "::error::lychee checked ${total:-0} link(s); the floor is $LINKS_FLOOR (an empty lane must not read green)"
+            exit 1
+          fi
+          # One line per broken link: file, url, status.
+          jq -r '.fail_map // {} | to_entries[] | .key as $f | .value[] | [$f, .url, (.status.text // .status.code // "?" | tostring)] | @tsv' lychee.json > broken.tsv
+          broken="$(wc -l < broken.tsv | tr -d ' ')"
+          echo "broken=$broken" >> "$GITHUB_OUTPUT"
+          {
+            echo "## docs"
+            echo
+            echo "- links checked: $total, broken: $broken"
+            echo
+            echo '```'
+            cat broken.tsv
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat broken.tsv
+      - name: File the rustdoc issue
+        if: always() && steps.rustdoc.outputs.failed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="tier3: rustdoc fails under -D warnings"
+          existing="$(gh issue list --state open --limit 500 --json number,title \
+            | jq -r --arg t "$title" '.[] | select(.title == $t) | .number' | head -1)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Still failing on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`. Run: $RUN_URL"
+            exit 0
+          fi
+          body="$(cat <<EOF
+          The weekly doc build (\`tier3-weekly.yml\`) ran \`cargo doc --workspace --all-features --no-deps\` under \`RUSTDOCFLAGS=-D warnings\` on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\` and it failed:
+
+          \`\`\`
+          $(cat rustdoc-excerpt.txt)
+          \`\`\`
+
+          - run: $RUN_URL
+          - Tier 1 never builds the docs, so this is the first place a broken intra-doc link shows. Reproduce with the same command.
+
+          refs #208, #7
+          EOF
+          )"
+          url="$(gh issue create --title "$title" --label documentation --label status:ready --body "$body")"
+          echo "$title: opened $url"
+      - name: File the broken-links issue
+        if: always() && steps.links.outputs.broken != '' && steps.links.outputs.broken != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BROKEN: ${{ steps.links.outputs.broken }}
+        run: |
+          set -euo pipefail
+          title="tier3: broken links in the Markdown"
+          list="$(awk -F'\t' '{ printf "- `%s`: %s (%s)\n", $1, $2, $3 }' broken.tsv)"
+          existing="$(gh issue list --state open --limit 500 --json number,title \
+            | jq -r --arg t "$title" '.[] | select(.title == $t) | .number' | head -1)"
+          if [ -n "$existing" ]; then
+            # shellcheck disable=SC2016 # the backticks are Markdown
+            gh issue comment "$existing" --body "$(printf 'Still broken on `%s` @ `%s` (%s link(s)):\n\n%s\n\nRun: %s' "$GITHUB_REF_NAME" "$GITHUB_SHA" "$BROKEN" "$list" "$RUN_URL")"
+            exit 0
+          fi
+          body="$(cat <<EOF
+          The weekly link check (\`tier3-weekly.yml\`, lychee) found $BROKEN broken link(s) in the Markdown on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`:
+
+          $list
+
+          - run: $RUN_URL
+          - A link that moved gets its new address; a link that is gone gets an archive.org copy or is dropped with the sentence that needed it rewritten. A host that answers 429 is accepted and not listed here; anything listed answered with a real failure twice.
+
+          refs #208, #7
+          EOF
+          )"
+          url="$(gh issue create --title "$title" --label documentation --label status:ready --body "$body")"
+          echo "$title: opened $url"
+
+  # One CycloneDX document per workspace member (`--all`), the fuzz crate
+  # excluded as everywhere else. Nothing to drift against: the artifact is
+  # the deliverable, and the floor is the only assertion.
+  sbom:
+    name: SBOM (cargo-cyclonedx)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-cyclonedx
+      - name: Generate
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          cargo cyclonedx --format json --all --all-features --override-filename sbom
+          mkdir -p sbom
+          for f in */sbom.json; do
+            mv "$f" "sbom/$(dirname "$f").cdx.json"
+          done
+          components="$(jq -s '[.[].components | length] | add' sbom/*.cdx.json)"
+          if [ -z "$components" ] || [ "$components" -lt "$COMPONENTS_FLOOR" ]; then
+            echo "::error::the SBOMs list ${components:-0} component(s) in total; the floor is $COMPONENTS_FLOOR (an empty lane must not read green)"
+            exit 1
+          fi
+          {
+            echo "## SBOM (cargo-cyclonedx)"
+            echo
+            echo "- $(cargo cyclonedx --version); ref: \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`"
+            echo "- documents: $(find sbom -name '*.cdx.json' | sort | tr '\n' ' '); components in total: $components; wall: ${SECONDS}s"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-${{ github.sha }}
+          path: sbom/
+          if-no-files-found: error
+          retention-days: 90
+
+  # The declared floor, built on. `rust-version` is read from the metadata
+  # so this job cannot disagree with the manifests; the toolchain named by
+  # a two-part version is that minor's newest patch, which is what a user
+  # on that floor would have.
+  msrv:
+    name: MSRV (rust-version, built and tested)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write       # to file the MSRV issue
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain
+      - name: Install the declared MSRV beside the pin
+        id: msrv
+        run: |
+          set -euo pipefail
+          msrv="$(cargo metadata --locked --format-version 1 | jq -r '.packages[] | select(.name == "tau-kernel") | .rust_version')"
+          [ -n "$msrv" ] && [ "$msrv" != null ] || { echo "::error::tau-kernel declares no rust-version"; exit 1; }
+          rustup toolchain install "$msrv" --profile minimal
+          echo "msrv=$msrv" >> "$GITHUB_OUTPUT"
+          echo "RUSTUP_TOOLCHAIN=$msrv" >> "$GITHUB_ENV"
+          rustc --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: msrv
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-nextest
+      - name: Build and test on the MSRV
+        id: run
+        env:
+          MSRV: ${{ steps.msrv.outputs.msrv }}
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          rc=0
+          leg=check
+          cargo check --locked --workspace --all-targets --all-features 2>&1 | sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' | tee msrv.log || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            leg=nextest
+            cargo nextest run --locked --workspace --all-features --profile ci --no-fail-fast 2>&1 | sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' | tee -a msrv.log || rc=$?
+          fi
+          tests="$(sed -nE 's/^[[:space:]]+Summary \[[^]]+\] +([0-9]+) tests? run.*/\1/p' msrv.log | tail -1)"
+          {
+            echo "## MSRV ($MSRV)"
+            echo
+            echo "- $(rustc --version); ref: \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`"
+            echo "- $leg: $([ "$rc" -eq 0 ] && echo ok || echo "failed (exit $rc)"); tests: ${tests:-none}; wall: ${SECONDS}s"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" -eq 0 ]; then
+            if [ -z "$tests" ] || [ "$tests" -lt "$TESTS_FLOOR" ]; then
+              echo "::error::the suite passed with ${tests:-0} test(s); the floor is $TESTS_FLOOR (an empty lane must not read green)"
+              exit 1
+            fi
+            echo "ok: $tests tests on $MSRV"
+            exit 0
+          fi
+          first="$(grep -nE '^(error|[[:space:]]+FAIL )' msrv.log | head -1 | cut -d: -f1)"
+          sed -n "${first:-1},\$p" msrv.log | head -60 > msrv-excerpt.txt
+          echo "leg=$leg" >> "$GITHUB_OUTPUT"
+          echo "DRIFT $leg on $MSRV"
+      - name: File the MSRV issue
+        if: always() && steps.run.outputs.leg != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MSRV: ${{ steps.msrv.outputs.msrv }}
+          LEG: ${{ steps.run.outputs.leg }}
+        run: |
+          set -euo pipefail
+          title="tier3: MSRV $MSRV no longer builds"
+          existing="$(gh issue list --state open --limit 500 --json number,title \
+            | jq -r --arg t "$title" '.[] | select(.title == $t) | .number' | head -1)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Still failing on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\` (\`$LEG\`). Run: $RUN_URL"
+            exit 0
+          fi
+          body="$(cat <<EOF
+          The weekly MSRV check (\`tier3-weekly.yml\`) installed the \`rust-version\` the manifests declare, \`$MSRV\`, and the \`$LEG\` leg failed on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`:
+
+          \`\`\`
+          $(cat msrv-excerpt.txt)
+          \`\`\`
+
+          - run: $RUN_URL
+          - Either the code or a dependency in the committed lockfile now needs a newer compiler than the floor promises. Raise \`rust-version\` in \`Cargo.toml\` in a PR that says why, or keep the promise and change the code.
+
+          refs #208, #7
+          EOF
+          )"
+          url="$(gh issue create --title "$title" --label status:ready --body "$body")"
+          echo "$title: opened $url"
+
+  # The throttle detector, last.
+  firings:
+    name: firings today (UTC)
+    runs-on: ubuntu-latest
+    needs: [soak, udeps, docs, sbom, msrv]
+    if: always()
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write       # to file the firings issue
+      actions: read       # to count this workflow's own scheduled runs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Count this workflow's scheduled firings today (UTC)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW: tier3-weekly.yml
+          CRON: "41 5 * * 0"
+          EVENT: ${{ github.event_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REFS: "#208, #7"
+        run: ./scripts/count-firings.sh
