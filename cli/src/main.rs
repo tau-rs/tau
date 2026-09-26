@@ -36,9 +36,20 @@
 //! is invisible to the fold by design (ADR-0012 §5) — and a store that
 //! could not drop a key is reported as exactly that (exit 10), never as
 //! erasure. The verb reads the log as written: it is for a run whose kernel
-//! is finished, and the fold is its only view of who is live. A store
-//! directory belongs to one running kernel (ADR-0012 §4 "One writer");
-//! opening it beside a live one is what #145 will lock against.
+//! is finished, and the fold is its only view of who is live.
+//!
+//! A store directory has one writer (ADR-0012 §4 "One writer",
+//! [#145](https://github.com/tau-rs/tau/issues/145)): the kernel that opened
+//! it holds a lock on its `STORE` file for as long as it runs, and both verbs
+//! open the store the same way, so beside a running kernel each is refused
+//! (exit 11, naming the directory) before anything else is read. `shred`
+//! opens the store before it reads the log on purpose: the lock says who
+//! holds the directory *now*, while the log on disk lags a live kernel, so
+//! the fold's live check is only consulted once nobody holds the store.
+//! `blobs` is refused too, although it only reads: a `Disk` cannot promise
+//! not to write, and a read-only view is a follow-on
+//! ([#234](https://github.com/tau-rs/tau/issues/234)) if an operator needs
+//! to inspect a running store.
 //!
 //! Neither verb initialises a store: a path with no `STORE` header is
 //! refused (exit 3), so a mistyped path cannot be shredded or listed as an
@@ -66,6 +77,7 @@
 //! | 8 | the `--from` snapshot is not a snapshot of this log at its offset: `seq` past the end, the prefix digest disagrees, the state does not re-hash to what the header claims, or the body's `next_seq` is not the header's `seq`. The message names the check. No build will make them fit |
 //! | 9 | `shred` refused: an agent in the subtree is live or cancelling. The message names it. Nothing was shredded; cancel it, wait for the abort, and shred again |
 //! | 10 | `shred` could not drop a key: the store reports a write-path failure, this shred's or an earlier one's, so erasure is not promised. The message names the failure |
+//! | 11 | the store is held by a running kernel (or another `tau`): its `STORE` file is locked. The message names the directory. Nothing was read or shredded; wait for the holder to finish |
 //!
 //! Exit 3 also covers a store the `blobs` and `shred` verbs cannot read: no
 //! `STORE` header at the path, or a header naming a `magic`, `v`, `digest`
@@ -108,7 +120,8 @@ exit codes:
   7  the --from snapshot is not usable by this build (magic, abi, fold, or a malformed body; the message names the field and both values)
   8  the --from snapshot is not a snapshot of this log at its offset (seq, prefix, state, or next_seq; the message names the check)
   9  shred refused: an agent in the subtree is live or cancelling (the message names it); nothing was shredded
-  10 shred could not drop a key: the store reports a write failure, so erasure is not promised (the message names it)";
+  10 shred could not drop a key: the store reports a write failure, so erasure is not promised (the message names it)
+  11 the store is held by a running kernel or another tau (STORE is locked; the message names the directory); nothing was touched";
 
 /// The first ABI every log the freeze covers was written at; below it, best effort.
 const FROZEN_AT: u16 = 2;
@@ -162,6 +175,8 @@ enum Failure {
     Live(AgentId),
     /// `shred` could not drop a key; the store's fault, as it reported it.
     Faulted(String),
+    /// The store is held: another `Disk` has its `STORE` locked.
+    Held(PathBuf),
 }
 
 impl Failure {
@@ -177,6 +192,7 @@ impl Failure {
             Self::Join(_) => 8,
             Self::Live(_) => 9,
             Self::Faulted(_) => 10,
+            Self::Held(_) => 11,
         }
     }
 }
@@ -191,6 +207,11 @@ impl fmt::Display for Failure {
                 "shred refused: {id} is still live; cancel it and wait for the abort before shredding"
             ),
             Self::Faulted(reason) => write!(f, "shred could not drop a key: {reason}"),
+            Self::Held(path) => write!(
+                f,
+                "store held: {} is open in a running kernel or another tau (STORE is locked); wait for it to finish",
+                path.display()
+            ),
             Self::Join(e) => write!(f, "snapshot is not a snapshot of this log: {e}"),
             Self::Malformed { line, source } => {
                 write!(f, "log entry on line {line} is malformed: {source}")
@@ -506,12 +527,14 @@ fn snapshot(log: &Path, at: Option<usize>, out: &Path) -> Result<(), Failure> {
     Ok(())
 }
 
-/// Opens a store that already exists; never initialises one (exit 2 or 3).
+/// Opens a store that already exists; never initialises one (exit 2, 3 or
+/// 11). The `Disk` holds the store until it is dropped.
 fn open_store(path: &Path) -> Result<Disk, Failure> {
     Disk::open_existing(path).map_err(|e| match e {
         OpenError::Io { path, source } => {
             Failure::Io(format!("cannot open {}: {source}", path.display()))
         }
+        OpenError::Held(path) => Failure::Held(path),
         OpenError::NotAStore(_) | OpenError::NoHeader(_) => Failure::Header(e.to_string()),
         other => Failure::Header(format!("{}: {other}", path.display())),
     })
@@ -559,6 +582,9 @@ fn blobs(store: &Path, refs: &[BlobRef]) -> Result<(), Failure> {
 }
 
 fn shred(log: &Path, store: &Path, root: AgentId) -> Result<(), Failure> {
+    // The store first: a held one is refused before the log is read, since
+    // the lock is current and the log on disk is not while a kernel runs.
+    let mut disk = open_store(store)?;
     let read = read(log)?;
     println!("{}", describe(read.header()));
     let mut state = State::initial();
@@ -570,7 +596,6 @@ fn shred(log: &Path, store: &Path, root: AgentId) -> Result<(), Failure> {
         )));
     }
     let subtree = state.subtree(root);
-    let mut disk = open_store(store)?;
     shred_subtree(&state, &mut disk, root).map_err(|e| match e {
         ShredError::Live(id) => Failure::Live(id),
         ShredError::Faulted { reason } => Failure::Faulted(reason),

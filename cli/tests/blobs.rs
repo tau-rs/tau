@@ -14,8 +14,9 @@ use tau_store::Disk;
 #[tokio::test]
 async fn tau_blobs_lists_every_reference_with_its_status() {
     let dir = tempfile::tempdir().unwrap();
-    let run = finished(Box::new(Disk::open(dir.path()).unwrap())).await;
-    run.kernel.shred(run.child).unwrap();
+    let mut run = finished(Box::new(Disk::open(dir.path()).unwrap())).await;
+    run.kernel().shred(run.child).unwrap();
+    run.release().await;
 
     let out = tau(&["blobs", path(dir.path())]);
     assert!(out.status.success(), "{}", stderr(&out));
@@ -40,8 +41,9 @@ async fn tau_blobs_lists_every_reference_with_its_status() {
 #[tokio::test]
 async fn tau_blobs_answers_for_the_references_asked() {
     let dir = tempfile::tempdir().unwrap();
-    let run = finished(Box::new(Disk::open(dir.path()).unwrap())).await;
-    run.kernel.shred(run.child).unwrap();
+    let mut run = finished(Box::new(Disk::open(dir.path()).unwrap())).await;
+    run.kernel().shred(run.child).unwrap();
+    run.release().await;
     let never = digest(b"never stored").to_hex();
     let empty = BlobRef::EMPTY.to_hex();
     let child = digest(CHILD_RESULT).to_hex();
@@ -63,6 +65,28 @@ async fn tau_blobs_answers_for_the_references_asked() {
     );
     assert_eq!(lines.next().unwrap(), format!("{child} shredded"));
     assert_eq!(lines.next(), None);
+}
+
+/// The lock knows nothing of liveness: a kernel that is finished but not
+/// gone holds its store as firmly as a running one.
+#[tokio::test]
+async fn tau_blobs_refuses_a_store_a_kernel_still_holds() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut run = finished(Box::new(Disk::open(dir.path()).unwrap())).await;
+
+    let out = tau(&["blobs", path(dir.path())]);
+    assert_eq!(out.status.code(), Some(11), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains(&format!("store held: {}", dir.path().display())),
+        "names the directory: {}",
+        stderr(&out)
+    );
+    assert!(stdout(&out).is_empty(), "nothing listed: {}", stdout(&out));
+
+    run.release().await;
+    let out = tau(&["blobs", path(dir.path())]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("references=3"), "{}", stdout(&out));
 }
 
 #[test]
