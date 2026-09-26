@@ -33,8 +33,8 @@
 //! | [`process`] | spawn with a scrubbed environment, bounded drain, the cancel ladder |
 //! | this file | [`AgentConfig`] and its ceiling, request validation, the auth probe, the flight registry, the billing table |
 //!
-//! An adapter (#127 for `claude`, #128 for `codex`) supplies exactly two
-//! things: a [`process::Invocation`] going in — argv, the first stdin
+//! An adapter ([`claude`] behind `agent-claude`; #128 for `codex`) supplies
+//! exactly two things: a [`process::Invocation`] going in — argv, the first stdin
 //! message, how to interrupt, which line is terminal — and an [`Outcome`]
 //! coming out, read from the lines the run collected. Those two types *are*
 //! the seam: an adapter that forgets a field does not compile, which is the
@@ -62,6 +62,8 @@
 //! checks that the `agent` feature pulls in no HTTP client, so that a
 //! provider call is not merely discouraged here but unreachable.
 
+#[cfg(feature = "agent-claude")]
+pub mod claude;
 pub mod envelope;
 pub mod process;
 pub mod wire;

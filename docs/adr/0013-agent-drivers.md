@@ -875,3 +875,43 @@ neighbour for.
   trait once two implementors exist to shape it; its methods return these
   same two types, so the extraction is a move with no behaviour change.
   §1's file layout is unchanged.
+- **2026-09-26** — The `claude` column is implemented by
+  [#127](https://github.com/tau-rs/tau/issues/127) as
+  `tau_drivers::agent::claude` behind the feature `agent-claude`, on the
+  seam the 2026-09-20 amendment describes: `claude::invocation` builds the
+  `process::Invocation`, `claude::outcome` reads the `Outcome`, and
+  `ClaudeDriver` is `impl Driver` over decode → flights → run → settle. Four
+  rows of §7 moved, none of the wire:
+  - **`--json-schema`** is *off*. #127 did not run it live, so the row's
+    "keeps it only if the final message is still the plain envelope text"
+    condition is unverified; the tolerant parser of §4 is the enforcement
+    until the drift job (§10) or a later pin runs it once and records the
+    `result` shape it produces. `--allowedTools` is passed as **one
+    comma-separated argument**: the flag is variadic (`<tools...>`) and a
+    space-separated list would swallow whatever flag followed it.
+  - **`budget.cost_microusd` exhaustion** is read by name, not pinned: a
+    `result` whose `subtype` or `terminal_reason` contains `budget` is
+    `{ "limit": "cost" }`. #130 run 6 pinned only the turns row.
+  - **`unavailable` at run time** is read tolerantly: `api_error_status`
+    401 or 403, or an `errors[]` entry naming authentication, an OAuth
+    token, or `/login`. The exit status and text of `claude auth status`
+    when logged out were not observed either (#130's machine was signed
+    in; so was #127's); the probe follows §6's general rule, exit ≠ 0 is
+    unavailable. A CLI that answered exit 0 with `"loggedIn": false` would
+    surface as `error.unavailable` from the run's own events, one run late.
+  - **`throttled`** is `api_error_status` 429, an `errors[]` entry naming a
+    rate limit or a quota, or any `rate_limit_event` in the transcript whose
+    `status` is not `allowed`; #130 saw only `allowed`.
+
+  The interrupt is exactly #130 §5a's `control_request` with
+  `request_id: tau-cancel-1`. `mode` is `init.apiKeySource`, and the login
+  probe's document contributes nothing to a reply (`mode_from_login` is
+  `|_| None`). The worker contract dropped #130's "messages arriving on
+  stdin are instructions from your parent" line, because v1 has no steering
+  (§3) and the only thing written after the task is the interrupt. Every
+  other row is as the table says, tested against the seven committed
+  transcripts, with the rows that wait on a grace period in the `ci`
+  profile (`agent_claude_ladder`). `tau-fake-cli` grew one directive,
+  `touch`, a readiness marker written after its signal handlers are
+  installed, so that those rows do not race the binary's start-up under
+  load — the shape of [#182](https://github.com/tau-rs/tau/issues/182).
