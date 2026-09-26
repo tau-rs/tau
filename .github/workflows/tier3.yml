@@ -6,7 +6,8 @@
 # determinism drift sentinel (#72), item 5, the benchmark regression
 # judge (#151), the keyless live e2e (#168), item 6, the flake hunter
 # (#204), item 3, dependency drift (#205), and item 4, the toolchain canary
-# (#206). The rest is tracked in #7.
+# (#206). Item 2, the long fuzz, is tier3-fuzz.yml (#207); the rest is
+# tracked in #7.
 #
 # The sentinel refolds every log in corpus/ with today's main, through
 # `tau replay --expect` (#91), and expects the state hash each was pinned at. A hash that moved means the reducer
@@ -18,10 +19,11 @@
 #
 # Two landmines from v1 are designed around here. Scheduled workflows get
 # throttled: every v1 cron fired every ~11-12h regardless of its expression,
-# for months, undetected, so the last step counts this workflow's own
-# scheduled firings on the current UTC day and files an issue when the count
-# is not exactly one. And an empty lane reports green: scripts/refold-corpus.sh
-# fails closed below a fixture-count floor.
+# for months, undetected, so the sentinel's last step counts this workflow's
+# own scheduled firings on the current UTC day (scripts/count-firings.sh,
+# shared with every other Tier 3 workflow file) and files an issue when the
+# count is not exactly one. And an empty lane reports green:
+# scripts/refold-corpus.sh fails closed below a fixture-count floor.
 #
 # The benchmark judge runs kernel/benches/kpi_ir.rs, ADR-0003's two KPIs
 # under callgrind, and compares each benchmark's instruction count with the
@@ -192,61 +194,20 @@ jobs:
             echo "$title: opened $url"
           done < drift.tsv
 
-      # The throttle detector. Counts *scheduled* runs of this workflow created
-      # on the same UTC calendar day as this one. On a scheduled run the count
-      # includes this one, so exactly 1 is healthy: 0 cannot happen, 2+ means
-      # the cron is firing more often than its expression. The window is a
-      # calendar day and not "the last 24 h" because GitHub's scheduler runs
-      # this cron about five hours late with half an hour of jitter either
-      # way: a sliding window anchored at this run caught yesterday's run on
-      # every night that started earlier in the hour than the night before
-      # (#156). The cron is 03:17, so the day boundary sits 20 h away from
-      # it; a delay that crosses midnight is worth the report it produces.
-      # On a manual run the count is written to the summary and nothing is
-      # filed — a dispatch inside the window would otherwise report a false
-      # double firing.
+      # The throttle detector (#7's first landmine): the count of this
+      # workflow's scheduled firings today, in scripts/count-firings.sh so
+      # tier3-fuzz.yml and the weekly file run the same one. The why is in
+      # the script's header (#156, #181).
       - name: Count this workflow's scheduled firings today (UTC)
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
+          WORKFLOW: tier3.yml
+          CRON: "17 3 * * *"
           EVENT: ${{ github.event_name }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          day="$(date -u '+%Y-%m-%d')"
-          count="$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/tier3.yml/runs" \
-            -f event=schedule -f created="$day" -F per_page=100 --jq '.total_count')"
-          echo "scheduled firings on $day (UTC): $count (event: $EVENT)"
-          {
-            echo "- scheduled firings on $day (UTC): $count (this run: \`$EVENT\`)"
-          } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$EVENT" != "schedule" ]; then
-            echo "not a scheduled run; count is informational"
-            exit 0
-          fi
-          if [ "$count" -eq 1 ]; then
-            exit 0
-          fi
-          title="tier3: the nightly did not fire exactly once in 24h"
-          existing="$(gh issue list --state open --limit 500 --json number,title \
-            | jq -r --arg t "$title" '.[] | select(.title == $t) | .number' | head -1)"
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "Again: $count scheduled firing(s) on $day (UTC), counted by $RUN_URL."
-            echo "already open as #$existing"
-            exit 0
-          fi
-          body="$(cat <<EOF
-          \`tier3.yml\` counted $count scheduled run(s) of itself created on \`$day\` (UTC, this run included). The cron is \`17 3 * * *\`, so the healthy count is exactly 1.
-
-          v1's crons fired every ~11-12h regardless of their expression, for months, undetected. This is the counter that is supposed to notice. Check the run list for the workflow, then decide whether the schedule moved or GitHub's scheduler did.
-
-          - run: $RUN_URL
-
-          refs #72, #7
-          EOF
-          )"
-          url="$(gh issue create --title "$title" --label status:ready --body "$body")"
-          echo "opened $url"
+          REFS: "#72, #7"
+        run: ./scripts/count-firings.sh
 
   # Item 5: the benchmark regression judge. valgrind and the runner binary
   # are installed here, not on every tier: only this job runs the target.
