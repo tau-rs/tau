@@ -259,7 +259,7 @@ jobs:
           {
             echo "## fuzz ($TARGET)"
             echo
-            echo "- seeds: $(ls "seeds/$TARGET" | wc -l), corpus grown to: $(ls "corpus/$TARGET" | wc -l)"
+            echo "- seeds: $(find "seeds/$TARGET" -type f | wc -l), corpus grown to: $(find "corpus/$TARGET" -type f | wc -l)"
             echo "- $(grep -E '^#[0-9]+\s+DONE' fuzz.log | tail -1 || echo 'no DONE line')"
             echo "- wall: ${SECONDS}s"
           } >> "$GITHUB_STEP_SUMMARY"
