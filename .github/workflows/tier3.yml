@@ -264,7 +264,7 @@ jobs:
             echo '```'
             if [ "$MODE" = "record" ]; then
               echo
-              echo 'Recorded baseline (`kpi-ir-baseline` artifact):'
+              echo "Recorded baseline (\`kpi-ir-baseline\` artifact):"
               echo
               echo '```'
               cat kernel/benches/kpi_ir.baseline.tsv
