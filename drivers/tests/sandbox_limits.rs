@@ -36,16 +36,14 @@ async fn cpu_limit_is_the_host_kernel_killing_the_run_billed_at_the_ceiling() {
 #[tokio::test]
 async fn wall_limit_is_the_shim_killing_the_run_with_real_usage() {
     let mut c = config(5, Duration::from_millis(500));
-    // The driver's last resort fires at `wall + abandon_grace` counted from
-    // the shim's spawn; the shim's wall bound only starts once it has set
-    // its limits, spawned the interpreter, and written the partial report
-    // (ADR-0009 §4). The grace therefore has to absorb the shim's whole
-    // startup plus its kill-reap-report tail, and under full-workspace load
-    // the default second was not enough: the shim was SIGKILLed before its
-    // report and the reply was `lost` (#211). This test is about the wall
-    // bound, not the last resort — `a_shim_that_never_reports_...` below
-    // is — so the grace is wide. It costs nothing on the green path: the
-    // shim reports at the wall and the driver returns at once.
+    // The driver's last resort fires `wall + abandon_grace` after the shim's
+    // partial report, so the grace covers the shim's kill-reap-report tail
+    // and nothing else (#220). Under full-workspace load even that tail has
+    // outrun the default second once (#211), and this test is about the
+    // wall bound, not the last resort — `a_shim_that_never_reports_...` and
+    // `a_slow_shim_startup_...` below are — so the grace is wide. It costs
+    // nothing on the green path: the shim reports at the wall and the
+    // driver returns at once.
     c.abandon_grace = Duration::from_secs(10);
     let (reply, root) = run_one(driver(c), request("echo waiting; sleep 20; echo never")).await;
     assert_eq!(reply.stop, Stop::WallLimit, "{reply:?}");
@@ -78,5 +76,44 @@ async fn a_shim_that_never_reports_is_killed_at_the_last_resort() {
         Some(&2_000),
         "the ceiling"
     );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn a_slow_shim_startup_does_not_eat_the_abandon_grace() {
+    // A fake shim whose startup takes 2 s, then a run that hits the wall:
+    // it writes the partial report (its wall clock starts), sleeps the
+    // wall, and writes a `wall_limit` report. With wall = 2 s and grace =
+    // 1 s the report lands 4 s after spawn. A driver that counts
+    // `wall + grace` from the spawn fires its last resort at 3 s and
+    // answers `lost` for a healthy run (#220); one that counts from the
+    // partial report fires at 5 s and reads the report at 4 s. Startup
+    // stays under the same 3 s bound, so the margins are 1 s each way.
+    let dir = common::sandbox::outside_dir("slow-shim");
+    let fake = dir.join("shim.sh");
+    std::fs::write(
+        &fake,
+        r#"#!/bin/sh
+# $1 is --report, $2 the path; the rest is ignored.
+report="$2"
+echo started
+sleep 2
+printf '{"interpreter_pid":%d,"outcome":null}' "$$" > "$report.tmp"
+mv "$report.tmp" "$report"
+sleep 2
+printf '{"interpreter_pid":%d,"outcome":{"end":"wall_limit","usage":{"cpu_user_us":1000,"cpu_sys_us":0,"max_rss_bytes":0}}}' "$$" > "$report.tmp"
+mv "$report.tmp" "$report"
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let mut c = config(3, Duration::from_secs(2));
+    c.abandon_grace = Duration::from_secs(1);
+    c.shim = Some(fake);
+    let (reply, root) = run_one(driver(c), request("echo hi")).await;
+    assert_eq!(reply.stop, Stop::WallLimit, "{reply:?}");
+    assert_eq!(reply.stdout, "started\n");
+    assert_eq!(reply.usage.compute_ms(), 1, "what the report said");
+    assert_eq!(root.spent.get(&DimKey::ComputeMs), Some(&1));
     let _ = std::fs::remove_dir_all(dir);
 }
