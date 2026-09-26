@@ -50,7 +50,8 @@ abi-review:
 
 deny:
     cargo deny check advisories licenses bans sources
-    cargo deny --manifest-path fuzz/Cargo.toml check --config deny.toml licenses bans sources
+    # No --config: the fuzz leg finds deny.toml from the cwd, which is the repo root under `just` (#186).
+    cargo deny --manifest-path fuzz/Cargo.toml check licenses bans sources
 
 # Fuzz one target for `secs` seconds (Tier 2 item 3). Needs nightly and
 # cargo-fuzz; the seed corpus is read, and what libFuzzer grows lands in
