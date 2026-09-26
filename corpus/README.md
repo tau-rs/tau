@@ -76,7 +76,7 @@ release, a harness run, a bug report), write the sidecar from a fold on
 `main` and check it the way the job will, with the kernel's own reader (#91):
 
 ```sh
-cargo build --release -p tau-kernel --bin tau
+cargo build --release -p tau-cli --bin tau
 ./target/release/tau replay corpus/<name>.log --expect corpus/<name>.hash
 ```
 

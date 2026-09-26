@@ -1,10 +1,14 @@
-//! `tau`: the kernel's command line. Two commands, `replay` (ADR-0010 §7,
-//! [#91](https://github.com/tau-rs/tau/issues/91)) and `snapshot` (ADR-0011
-//! §4, [#119](https://github.com/tau-rs/tau/issues/119)).
+//! `tau`: the kernel's command line. Four commands: `replay` (ADR-0010 §7,
+//! [#91](https://github.com/tau-rs/tau/issues/91)), `snapshot` (ADR-0011
+//! §4, [#119](https://github.com/tau-rs/tau/issues/119)), and the two store
+//! verbs `blobs` and `shred` (ADR-0012 §4,
+//! [#199](https://github.com/tau-rs/tau/issues/199)).
 //!
 //! ```text
 //! tau replay <log> [--from <snapshot>] [--expect <hash-file>]
 //! tau snapshot <log> [--at <k>] <out>
+//! tau blobs <store> [<ref>...]
+//! tau shred <log> <store> <root>
 //! ```
 //!
 //! `replay` reads a log written by any build, refuses one this build cannot
@@ -18,6 +22,27 @@
 //!
 //! `snapshot` folds the first `k` entries (default: all of them) and writes
 //! the two-line snapshot file `replay --from` reads.
+//!
+//! `blobs` opens a store directory and says what it holds: one line per
+//! reference with `present` (some copy opens), `shredded` (copies exist,
+//! no key does) or `absent` (never stored), plus the tombstone list of
+//! shredded owners. With references on the command line, it answers for
+//! those instead of listing the store.
+//!
+//! `shred` is `Kernel::shred` from outside the kernel: it folds the log,
+//! finds the subtree under `root`, refuses if any agent in it is still live
+//! or cancelling (exit 9, naming the agent, nothing touched), and otherwise
+//! drops every agent's key in the store. The log is not changed — a shred
+//! is invisible to the fold by design (ADR-0012 §5) — and a store that
+//! could not drop a key is reported as exactly that (exit 10), never as
+//! erasure. The verb reads the log as written: it is for a run whose kernel
+//! is finished, and the fold is its only view of who is live. A store
+//! directory belongs to one running kernel (ADR-0012 §4 "One writer");
+//! opening it beside a live one is what #145 will lock against.
+//!
+//! Neither verb initialises a store: a path with no `STORE` header is
+//! refused (exit 3), so a mistyped path cannot be shredded or listed as an
+//! empty store.
 //!
 //! The fold is the reducer alone: no hook program, no driver, no clock
 //! (ADR-0008: a fold confirms verdicts, it never runs them). Nothing here
@@ -39,6 +64,12 @@
 //! | 6 | `--expect` did not match. The message names both hashes |
 //! | 7 | the `--from` snapshot is not usable by this build: wrong magic, an `abi` newer than this build's, a `fold` other than this build's, or a body that does not parse. The message names the field and both values. Use another build, or refold from zero |
 //! | 8 | the `--from` snapshot is not a snapshot of this log at its offset: `seq` past the end, the prefix digest disagrees, the state does not re-hash to what the header claims, or the body's `next_seq` is not the header's `seq`. The message names the check. No build will make them fit |
+//! | 9 | `shred` refused: an agent in the subtree is live or cancelling. The message names it. Nothing was shredded; cancel it, wait for the abort, and shred again |
+//! | 10 | `shred` could not drop a key: the store reports a write-path failure, this shred's or an earlier one's, so erasure is not promised. The message names the failure |
+//!
+//! Exit 3 also covers a store the `blobs` and `shred` verbs cannot read: no
+//! `STORE` header at the path, or a header naming a `magic`, `v`, `digest`
+//! or `aead` this build does not know.
 //!
 //! # The header's promise
 //!
@@ -53,25 +84,31 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use tau_kernel::abi::{LogHeader, ABI};
+use tau_kernel::abi::{AgentId, BlobRef, LogHeader, ABI};
+use tau_kernel::kernel::{shred_subtree, ShredError};
 use tau_kernel::log::{Log, LogError};
 use tau_kernel::reducer::{Refusal, State, StateHash};
 use tau_kernel::snapshot::{JoinError, Snapshot, SnapshotError};
+use tau_store::{Disk, OpenError, Status};
 
 const USAGE: &str = "usage:
   tau replay <log> [--from <snapshot>] [--expect <hash-file>]
   tau snapshot <log> [--at <k>] <out>
+  tau blobs <store> [<ref>...]
+  tau shred <log> <store> <root>
 
 exit codes:
-  0  folded (and matched --expect, if given)
+  0  folded (and matched --expect, if given); listed; shredded
   1  usage
-  2  the log, the --from snapshot, the --expect file, or the snapshot output could not be read or written
-  3  the header is not readable by this build (magic, or abi newer than this build's)
+  2  the log, the --from snapshot, the --expect file, the snapshot output, or the store could not be read or written
+  3  the log header, or the store's STORE header, is not readable by this build (magic, v, digest, aead, or abi newer than this build's); or the path is not a store
   4  an entry line is malformed (the message names the line)
   5  the reducer refused an entry (the message names the entry)
   6  --expect did not match (the message names both hashes)
   7  the --from snapshot is not usable by this build (magic, abi, fold, or a malformed body; the message names the field and both values)
-  8  the --from snapshot is not a snapshot of this log at its offset (seq, prefix, state, or next_seq; the message names the check)";
+  8  the --from snapshot is not a snapshot of this log at its offset (seq, prefix, state, or next_seq; the message names the check)
+  9  shred refused: an agent in the subtree is live or cancelling (the message names it); nothing was shredded
+  10 shred could not drop a key: the store reports a write failure, so erasure is not promised (the message names it)";
 
 /// The first ABI every log the freeze covers was written at; below it, best effort.
 const FROZEN_AT: u16 = 2;
@@ -88,6 +125,15 @@ enum Cmd {
         log: PathBuf,
         at: Option<usize>,
         out: PathBuf,
+    },
+    Blobs {
+        store: PathBuf,
+        refs: Vec<BlobRef>,
+    },
+    Shred {
+        log: PathBuf,
+        store: PathBuf,
+        root: AgentId,
     },
 }
 
@@ -112,6 +158,10 @@ enum Failure {
     Unusable(SnapshotError),
     /// The snapshot and the log do not belong together.
     Join(JoinError),
+    /// `shred` refused: this agent in the subtree is live or cancelling.
+    Live(AgentId),
+    /// `shred` could not drop a key; the store's fault, as it reported it.
+    Faulted(String),
 }
 
 impl Failure {
@@ -125,6 +175,8 @@ impl Failure {
             Self::Mismatch { .. } => 6,
             Self::Unusable(_) => 7,
             Self::Join(_) => 8,
+            Self::Live(_) => 9,
+            Self::Faulted(_) => 10,
         }
     }
 }
@@ -134,6 +186,11 @@ impl fmt::Display for Failure {
         match self {
             Self::Usage(m) | Self::Io(m) | Self::Header(m) => f.write_str(m),
             Self::Unusable(e) => write!(f, "snapshot is not usable by this build: {e}"),
+            Self::Live(id) => write!(
+                f,
+                "shred refused: {id} is still live; cancel it and wait for the abort before shredding"
+            ),
+            Self::Faulted(reason) => write!(f, "shred could not drop a key: {reason}"),
             Self::Join(e) => write!(f, "snapshot is not a snapshot of this log: {e}"),
             Self::Malformed { line, source } => {
                 write!(f, "log entry on line {line} is malformed: {source}")
@@ -162,6 +219,8 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Cmd, Failure> {
         "--help" | "-h" | "help" => Ok(Cmd::Help),
         "replay" => parse_replay(args),
         "snapshot" => parse_snapshot(args),
+        "blobs" => parse_blobs(args),
+        "shred" => parse_shred(args),
         other => Err(usage(format_args!("unknown command `{other}`"))),
     }
 }
@@ -227,6 +286,79 @@ fn parse_snapshot(mut args: impl Iterator<Item = String>) -> Result<Cmd, Failure
         ))),
         _ => Err(usage("`snapshot` needs a log and an output path")),
     }
+}
+
+/// Positional arguments only: `--help` is honoured, any other flag is a
+/// usage error.
+fn positionals(
+    verb: &str,
+    args: impl Iterator<Item = String>,
+) -> Result<Option<Vec<String>>, Failure> {
+    let mut out = Vec::new();
+    for arg in args {
+        match arg.as_str() {
+            "--help" | "-h" => return Ok(None),
+            flag if flag.starts_with("--") => {
+                return Err(usage(format_args!("unknown flag `{flag}` for `{verb}`")));
+            }
+            _ => out.push(arg),
+        }
+    }
+    Ok(Some(out))
+}
+
+fn parse_blobs(args: impl Iterator<Item = String>) -> Result<Cmd, Failure> {
+    let Some(args) = positionals("blobs", args)? else {
+        return Ok(Cmd::Help);
+    };
+    let mut args = args.into_iter();
+    let store = args
+        .next()
+        .map(PathBuf::from)
+        .ok_or_else(|| usage("`blobs` needs a store directory"))?;
+    let refs = args
+        .map(|hex| {
+            BlobRef::from_hex(&hex).map_err(|e| {
+                usage(format_args!(
+                    "`{hex}` is not a payload reference (64 lowercase hex characters): {e}"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Cmd::Blobs { store, refs })
+}
+
+fn parse_shred(args: impl Iterator<Item = String>) -> Result<Cmd, Failure> {
+    let Some(args) = positionals("shred", args)? else {
+        return Ok(Cmd::Help);
+    };
+    let mut args = args.into_iter();
+    match (args.next(), args.next(), args.next(), args.next()) {
+        (Some(log), Some(store), Some(root), None) => Ok(Cmd::Shred {
+            log: PathBuf::from(log),
+            store: PathBuf::from(store),
+            root: parse_agent(&root)?,
+        }),
+        (_, _, _, Some(extra)) => Err(usage(format_args!(
+            "`shred` takes a log, a store and a root agent, got a fourth: `{extra}`"
+        ))),
+        _ => Err(usage(
+            "`shred` needs a log, a store directory and a root agent",
+        )),
+    }
+}
+
+/// An agent id as the kernel prints it (`agent:7`) or bare (`7`).
+fn parse_agent(text: &str) -> Result<AgentId, Failure> {
+    text.strip_prefix("agent:")
+        .unwrap_or(text)
+        .parse::<u64>()
+        .map(AgentId::new)
+        .map_err(|e| {
+            usage(format_args!(
+                "`{text}` is not an agent id (`agent:<n>` or `<n>`): {e}"
+            ))
+        })
 }
 
 /// What the header lets this build promise about the fold.
@@ -374,6 +506,84 @@ fn snapshot(log: &Path, at: Option<usize>, out: &Path) -> Result<(), Failure> {
     Ok(())
 }
 
+/// Opens a store that already exists; never initialises one (exit 2 or 3).
+fn open_store(path: &Path) -> Result<Disk, Failure> {
+    Disk::open_existing(path).map_err(|e| match e {
+        OpenError::Io { path, source } => {
+            Failure::Io(format!("cannot open {}: {source}", path.display()))
+        }
+        OpenError::NotAStore(_) | OpenError::NoHeader(_) => Failure::Header(e.to_string()),
+        other => Failure::Header(format!("{}: {other}", path.display())),
+    })
+}
+
+const fn status_word(status: Status) -> &'static str {
+    match status {
+        Status::Present => "present",
+        Status::Shredded => "shredded",
+        Status::Absent => "absent",
+    }
+}
+
+fn join_ids(ids: &[AgentId]) -> String {
+    ids.iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn blobs(store: &Path, refs: &[BlobRef]) -> Result<(), Failure> {
+    let disk = open_store(store)?;
+    let io = |what: &str, e: std::io::Error| {
+        Failure::Io(format!("cannot read {}: {e}", store.join(what).display()))
+    };
+    let shredded = disk.shredded().map_err(|e| io("shredded", e))?;
+    let listed = if refs.is_empty() {
+        disk.references().map_err(|e| io("objects", e))?
+    } else {
+        refs.to_vec()
+    };
+    println!(
+        "store={} references={} shredded={}",
+        store.display(),
+        listed.len(),
+        shredded.len()
+    );
+    if !shredded.is_empty() {
+        println!("shredded: {}", join_ids(&shredded));
+    }
+    for blob in &listed {
+        println!("{blob} {}", status_word(disk.status(blob)));
+    }
+    Ok(())
+}
+
+fn shred(log: &Path, store: &Path, root: AgentId) -> Result<(), Failure> {
+    let read = read(log)?;
+    println!("{}", describe(read.header()));
+    let mut state = State::initial();
+    apply_all(&mut state, read.entries(), 0)?;
+    if state.agent(root).is_none() {
+        return Err(usage(format_args!(
+            "{root} is not an agent in {}",
+            log.display()
+        )));
+    }
+    let subtree = state.subtree(root);
+    let mut disk = open_store(store)?;
+    shred_subtree(&state, &mut disk, root).map_err(|e| match e {
+        ShredError::Live(id) => Failure::Live(id),
+        ShredError::Faulted { reason } => Failure::Faulted(reason),
+        other => Failure::Faulted(other.to_string()),
+    })?;
+    println!(
+        "shredded={} root={root} agents: {}",
+        subtree.len(),
+        join_ids(&subtree)
+    );
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let outcome = match parse(std::env::args().skip(1)) {
         Ok(Cmd::Help) => {
@@ -382,6 +592,8 @@ fn main() -> ExitCode {
         }
         Ok(Cmd::Replay { log, from, expect }) => replay(&log, from.as_deref(), expect.as_deref()),
         Ok(Cmd::Snapshot { log, at, out }) => snapshot(&log, at, &out),
+        Ok(Cmd::Blobs { store, refs }) => blobs(&store, &refs),
+        Ok(Cmd::Shred { log, store, root }) => shred(&log, &store, root),
         Err(usage) => Err(usage),
     };
     match outcome {

@@ -1,0 +1,30 @@
+[package]
+name        = "tau-cli"
+description = "The tau command line: operator verbs over a log and a blob store, from outside the kernel."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+# The binary ships as `tau` (HANDOFF §5: `cargo install tau-cli` gives `tau`,
+# the ripgrep -> rg pattern). It lives in its own crate because it is a
+# harness: it links the kernel *and* the store, and the store depends on the
+# kernel, so a binary inside `tau-kernel` could never open a `Disk`. Nothing
+# here has special powers; every verb uses the two crates' public APIs.
+[[bin]]
+name = "tau"
+path = "src/main.rs"
+
+[dependencies]
+tau-kernel = { path = "../kernel", version = "0.0.0" }
+tau-store  = { path = "../store", version = "0.0.0" }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio    = { workspace = true, features = ["rt", "macros", "sync"] }
+
+[lints]
+workspace = true

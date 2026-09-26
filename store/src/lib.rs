@@ -80,6 +80,10 @@ pub enum OpenError {
     /// refused rather than initialised over whatever is there.
     #[error("{0}: not a store (no STORE header) and not empty")]
     NotAStore(PathBuf),
+    /// No `STORE` header at the path, and [`Disk::open_existing`] was asked
+    /// not to initialise one.
+    #[error("{0}: not a store (no STORE header)")]
+    NoHeader(PathBuf),
     /// `STORE` is not a JSON object.
     #[error("STORE header is not JSON: {0}")]
     Malformed(#[source] serde_json::Error),
@@ -157,10 +161,57 @@ impl Disk {
         })
     }
 
+    /// Opens the store at `path` and only that: a path with no `STORE`
+    /// header is refused, never initialised. For tooling that names a store
+    /// from outside the kernel (`tau blobs`, `tau shred`), where a mistyped
+    /// path must fail rather than create an empty store to operate on.
+    ///
+    /// # Errors
+    ///
+    /// [`OpenError::NoHeader`] if there is no header to read; otherwise as
+    /// [`Disk::open`].
+    pub fn open_existing(path: impl AsRef<Path>) -> Result<Self, OpenError> {
+        let root = path.as_ref();
+        let header = root.join(HEADER_FILE);
+        match fs::metadata(&header) {
+            Ok(_) => Self::open(root),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                Err(OpenError::NoHeader(root.to_path_buf()))
+            }
+            Err(source) => Err(OpenError::Io {
+                path: header,
+                source,
+            }),
+        }
+    }
+
     /// The directory this store lives in.
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.root
+    }
+
+    /// Every reference with a copy in the store, in reference order, for
+    /// tooling: the directories under `objects/`, each name read as a
+    /// reference. A shredded reference is still listed, since its copies
+    /// exist and none opens; [`Disk::status`] tells the two apart. A name
+    /// that is not a reference is skipped.
+    ///
+    /// # Errors
+    ///
+    /// `objects/` could not be listed.
+    pub fn references(&self) -> io::Result<Vec<BlobRef>> {
+        let entries = match fs::read_dir(self.root.join(OBJECTS_DIR)) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => return Err(err),
+        };
+        let mut refs: Vec<BlobRef> = entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| BlobRef::from_hex(entry.file_name().to_str()?).ok())
+            .collect();
+        refs.sort_unstable();
+        Ok(refs)
     }
 
     /// Whether `blob` is readable, erased, or was never here.

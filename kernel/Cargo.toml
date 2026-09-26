@@ -11,13 +11,6 @@ authors.workspace      = true
 [lib]
 name = "tau_kernel"
 
-# The binary ships as `tau` from the `tau-kernel` crate (HANDOFF: `cargo
-# install tau-kernel` gives `tau`, the ripgrep -> rg pattern). It uses only
-# the crate's public API; the `testing` feature is not on its path.
-[[bin]]
-name = "tau"
-path = "src/bin/tau.rs"
-
 [features]
 # Exposes constructors that the kernel's own allocators own in production, so
 # that test targets can build ABI values without a running kernel. Enabled only
