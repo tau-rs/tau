@@ -21,6 +21,9 @@ Prerequisites: `just`, `cargo-nextest`, `cargo-insta` (each via `cargo install`)
 - `drivers/` — the only code that touches the outside world (HTTP, model providers).
 - `libtau/` — userspace over the seven syscalls: `infer()` and the tool loop.
   No special powers; anything expressible over the seven belongs here.
+- `cli/` — `tau-cli`, the `tau` binary: operator verbs over a log file and a
+  store directory (`replay`, `snapshot`, `blobs`, `shred`). Its own crate because
+  it links the kernel and the store, and the store depends on the kernel.
 - `store/` — `tau-store`. The persistent, encrypting payload store behind the
   kernel's `Blobs` port (ADR-0012): one sealed copy per owner, erasure by key
   drop. The kernel boots on `blob::Memory` when the harness supplies none.

@@ -14,7 +14,7 @@
 #   * fewer than CORPUS_FLOOR fixtures (an empty or half-checked-out corpus);
 #   * a log with no sidecar, an unreadable log, a fold that refuses an entry
 #     — every exit of `tau replay` that is not the hash comparison itself
-#     (exit 6; the others are documented in kernel/src/bin/tau.rs).
+#     (exit 6; the others are documented in cli/src/main.rs).
 set -euo pipefail
 
 CORPUS="${CORPUS:-corpus}"
@@ -23,7 +23,7 @@ DRIFT_OUT="${DRIFT_OUT:-drift.tsv}"
 TAU="${TAU:-./target/release/tau}"
 
 if [ ! -x "$TAU" ]; then
-  echo "::error::$TAU is not an executable; build it first (cargo build --release -p tau-kernel --bin tau)"
+  echo "::error::$TAU is not an executable; build it first (cargo build --release -p tau-cli --bin tau)"
   exit 1
 fi
 

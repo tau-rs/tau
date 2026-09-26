@@ -1628,6 +1628,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tau-cli"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+ "tau-kernel",
+ "tau-store",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "tau-drivers"
 version = "0.0.0"
 dependencies = [

@@ -185,4 +185,17 @@ fn the_schema_is_strict_where_the_parser_is_tolerant() {
             "{status} is missing"
         );
     }
+    // Structured-output modes are strict all the way down: OpenAI's rejects
+    // a schema whose nested object leaves `additionalProperties` open
+    // (`invalid_json_schema` at `properties.artifacts.items`, #128's first
+    // `codex` recording), so every object closes, not only the root.
+    let item = &fixture["properties"]["artifacts"]["items"];
+    assert_eq!(item["type"], json!("object"));
+    assert_eq!(item["additionalProperties"], json!(false));
+    assert_eq!(item["required"], json!(["kind", "path"]));
+    // ... and it forbids `oneOf` outright (`'oneOf' is not permitted` at
+    // `...items.properties.kind`); `anyOf` says the same of a constant set.
+    assert!(!text.contains("\"oneOf\""), "oneOf is not permitted");
+    assert!(fixture["properties"]["status"]["anyOf"].is_array());
+    assert!(item["properties"]["kind"]["anyOf"].is_array());
 }

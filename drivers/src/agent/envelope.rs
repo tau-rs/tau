@@ -207,9 +207,14 @@ fn last_balanced_object(text: &str) -> Option<&str> {
 ///
 /// Strict where the parser is tolerant: every field is required, including
 /// the three the parser defaults and the nullable `error`, and
-/// `additionalProperties` is `false`. That is the shape structured-output
-/// modes accept, and asking for all six fields is how the session is told
-/// to write all six.
+/// `additionalProperties` is `false` on every object, not only the root,
+/// and an enum is spelled `anyOf`, never `oneOf`: OpenAI's structured-output
+/// mode rejects a nested object left open and rejects `oneOf` outright
+/// (`invalid_json_schema` at `properties.artifacts.items` and at
+/// `...items.properties.kind`, #128's first `codex` recordings). For a set
+/// of constants the two keywords mean the same. That is the shape
+/// structured-output modes accept, and asking for all six fields is how the
+/// session is told to write all six.
 #[must_use]
 pub fn schema() -> Value {
     let settings = schemars::generate::SchemaSettings::draft2020_12().with(|s| {
@@ -222,14 +227,39 @@ pub fn schema() -> Value {
     if let Some(object) = schema.as_object_mut() {
         object.remove("title");
         object.remove("description");
-        let names: Vec<Value> = object
-            .get("properties")
-            .and_then(Value::as_object)
-            .map(|p| p.keys().map(|k| Value::String(k.clone())).collect())
-            .unwrap_or_default();
-        object.insert("required".to_owned(), Value::Array(names));
-        object.insert("additionalProperties".to_owned(), Value::Bool(false));
     }
+    harden(&mut schema);
     super::tidy(&mut schema, true);
     schema
+}
+
+/// Requires every property and forbids unknown ones on each object schema
+/// under `value`, so the strictness the root has reaches the nested ones,
+/// and respells `oneOf` as `anyOf`.
+fn harden(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            if let Some(variants) = object.remove("oneOf") {
+                object.insert("anyOf".to_owned(), variants);
+            }
+            if object.get("type") == Some(&Value::String("object".to_owned())) {
+                let names: Vec<Value> = object
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .map(|p| p.keys().map(|k| Value::String(k.clone())).collect())
+                    .unwrap_or_default();
+                object.insert("required".to_owned(), Value::Array(names));
+                object.insert("additionalProperties".to_owned(), Value::Bool(false));
+            }
+            for (_, child) in object.iter_mut() {
+                harden(child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                harden(item);
+            }
+        }
+        _ => {}
+    }
 }

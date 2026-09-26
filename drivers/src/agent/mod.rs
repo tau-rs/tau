@@ -33,12 +33,12 @@
 //! | [`process`] | spawn with a scrubbed environment, bounded drain, the cancel ladder |
 //! | this file | [`AgentConfig`] and its ceiling, request validation, the auth probe, the flight registry, the billing table |
 //!
-//! An adapter ([`claude`] behind `agent-claude`; #128 for `codex`) supplies
-//! exactly two things: a [`process::Invocation`] going in — argv, the first stdin
-//! message, how to interrupt, which line is terminal — and an [`Outcome`]
-//! coming out, read from the lines the run collected. Those two types *are*
-//! the seam: an adapter that forgets a field does not compile, which is the
-//! same contract a trait would give.
+//! An adapter ([`claude`] behind `agent-claude`, [`codex`] behind
+//! `agent-codex`) supplies exactly two things: a [`process::Invocation`]
+//! going in — argv, the first stdin message, how to interrupt, which line is
+//! terminal — and an [`Outcome`] coming out, read from the lines the run
+//! collected. Those two types *are* the seam: an adapter that forgets a
+//! field does not compile, which is the same contract a trait would give.
 //!
 //! ADR-0013 §1 writes that seam as a crate-private `Cli` trait with a
 //! generic `AgentDriver<C>`. It is deferred, not dropped: a crate-private
@@ -64,6 +64,8 @@
 
 #[cfg(feature = "agent-claude")]
 pub mod claude;
+#[cfg(feature = "agent-codex")]
+pub mod codex;
 pub mod envelope;
 pub mod process;
 pub mod wire;
@@ -397,7 +399,7 @@ pub enum ConfigError {
 ///
 /// This is the hook each adapter fills in. `claude auth status` prints JSON
 /// carrying the user's email, organisation id and name; `codex login
-/// status` prints one line. Only [`mode_from_login`](Self::mode_from_login)
+/// status` prints one line, on stderr. Only [`mode_from_login`](Self::mode_from_login)
 /// ever reaches a reply, and it returns **one field, never the document**,
 /// because a reply is a blob the log keeps forever.
 pub struct Probe {
@@ -406,11 +408,22 @@ pub struct Probe {
     /// Arguments that make it report its login state
     /// (`["auth", "status"]`, `["login", "status"]`).
     pub login_args: Vec<String>,
-    /// Reads the one opaque mode string out of the login command's stdout,
-    /// or `None` when the CLI states nothing the driver should carry. Never
-    /// interpreted, never enumerated: the policy behind such an enum
-    /// changed twice in 2026.
-    pub mode_from_login: fn(&str) -> Option<String>,
+    /// Reads the one opaque mode string out of what the login command
+    /// printed, or `None` when the CLI states nothing the driver should
+    /// carry. Never interpreted, never enumerated: the policy behind such
+    /// an enum changed twice in 2026. Both streams are offered because
+    /// `codex login status` 0.157.1 prints its line on stderr (#128 run 0).
+    pub mode_from_login: fn(&LoginOutput) -> Option<String>,
+}
+
+/// What the login command printed, for [`Probe::mode_from_login`] to read
+/// one field out of.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LoginOutput {
+    /// Standard output, lines joined by `\n`.
+    pub stdout: String,
+    /// Standard error, as the run kept it.
+    pub stderr: String,
 }
 
 impl std::fmt::Debug for Probe {
@@ -509,7 +522,10 @@ pub fn probe_login(config: &AgentConfig, probe: &Probe) -> Verdict {
         .join("\n");
     match run.code() {
         Some(0) => Verdict::Ready {
-            mode: (probe.mode_from_login)(&out),
+            mode: (probe.mode_from_login)(&LoginOutput {
+                stdout: out,
+                stderr: run.stderr.clone(),
+            }),
         },
         code => {
             let said = if run.stderr.trim().is_empty() {

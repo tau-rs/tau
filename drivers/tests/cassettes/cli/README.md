@@ -18,9 +18,32 @@ exactly `HOME`, `PATH` and `USER` — `USER` because the CLI's Keychain
 lookup on macOS keys on it, and without it a logged-in laptop reads as
 logged out. Runs 10 and 11 ran under a throwaway `HOME` with no login.
 Run 10 is `claude auth status`, not a print run: its one `stdout` record
-holds the pretty-printed document as one object, and `cut` says so. There
-is no `codex` transcript: #130's machine had no `codex` login, so #128
-begins by recording one on a machine that does.
+holds the pretty-printed document as one object, and `cut` says so.
+
+`codex-0.157.1/` is the runs of
+[#128](https://github.com/tau-rs/tau/issues/128), recorded on 2026-09-26
+on a machine signed in with ChatGPT, by a `codex` variant of the same
+runner that writes these records directly. The CLI came from
+`npm install @openai/codex@0.157.1` into a scratch prefix, sharing the
+machine's login; the model was the CLI's default. Run 0 is the login probe
+(nothing on stdout; the mode line is on stderr). Runs 1 to 3 are the
+recipe: the task to completion, then `SIGINT` and `SIGTERM` to the process
+group two seconds after `turn.started`. Run 4 is the recipe's `exec resume`
+argv, which has no sandbox flag, so the CLI ran read-only and the envelope
+says `failed`; run 5 is the same resume with
+`-c sandbox_mode="workspace-write"`, and shows a resumed thread working in
+the resumer's cwd, not the thread's original one. Run 6 is the first
+attempt at run 1: OpenAI's structured-output mode rejected the envelope
+schema as committed before #128 (an open nested object, then `oneOf`), and
+the turn failed before any item; `envelope::schema()` now closes every
+object and spells enums `anyOf`. Run 7 is run 1 with `--ignore-user-config`,
+the isolation flag the driver's fixed argv carries: the login is read
+regardless, and the run completes.
+
+`codex-0.46.0/` is one run on the pin ADR-0013 §7 named: on 2026-09-26 that
+version was refused every model for a ChatGPT login (five retries, then
+`turn.failed`, exit 1), so the pin moved. The directory stays as the
+record of why.
 
 ## Format
 
@@ -46,6 +69,10 @@ Per ADR-0013 §10, and listed in every header's `scrubbed`:
   cut, because they are one user's machine, not the CLI's surface;
 - a `hook_response` event keeps `type`, `subtype` and `hook_name` only:
   the body is one user's hook output.
+
+For the `codex` runs: the `--output-schema` path in `argv` is made
+repo-relative, and the account name a `command_execution` item echoed in
+`aggregated_output` (`ls -l`) is `<user>`.
 
 A `stdout` record that was cut says so in `cut`. Nothing else is altered,
 and the same secret-shape guard that covers the provider cassettes covers

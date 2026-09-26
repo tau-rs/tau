@@ -4,11 +4,11 @@
     "artifacts": {
       "description": "What the task produced.",
       "items": {
+        "additionalProperties": false,
         "description": "One thing the session produced.",
         "properties": {
           "kind": {
-            "description": "What it is.",
-            "oneOf": [
+            "anyOf": [
               {
                 "const": "file",
                 "description": "A file in the workspace.",
@@ -24,7 +24,8 @@
                 "description": "A report, meant to be read.",
                 "type": "string"
               }
-            ]
+            ],
+            "description": "What it is."
           },
           "path": {
             "description": "Where it is. The contract asks for a path relative to the workspace; #130's session wrote absolute ones, so both are accepted and the driver rewrites neither.",
@@ -32,8 +33,8 @@
           }
         },
         "required": [
-          "path",
-          "kind"
+          "kind",
+          "path"
         ],
         "type": "object"
       },
@@ -61,8 +62,7 @@
       "type": "array"
     },
     "status": {
-      "description": "The session's own verdict on the task.",
-      "oneOf": [
+      "anyOf": [
         {
           "const": "ok",
           "description": "The task was done.",
@@ -83,7 +83,8 @@
           "description": "A later instruction told the session to wind down.",
           "type": "string"
         }
-      ]
+      ],
+      "description": "The session's own verdict on the task."
     },
     "summary": {
       "description": "Up to three sentences.",
