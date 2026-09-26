@@ -158,3 +158,16 @@ handleable condition instead of a hang whose cause is three layers away.
 **Separate syscalls for capability transfer.** Rejected: transfer rides in a
 message, so it is already `send`. Giving it its own syscall would duplicate the
 authority check in two places, and the second one is where the bug would live.
+
+## Amendments
+
+- **2026-09-26** — A kernel-issued freeze with grace on wall exhaustion is
+  recorded as failing the irreducibility test
+  ([ADR-0015](0015-wall-grace-is-clock-policy.md),
+  [#197](https://github.com/tau-rs/tau/issues/197),
+  [#17](https://github.com/tau-rs/tau/issues/17)). The harness owns the
+  clock and can already `cancel`, so "one tick before an agent enters its
+  last *g* units, cancel it with grace equal to its remaining wall" is a
+  program over what exists; it lives in the clock source, not the reducer.
+  The seven do not move and "wall exhaustion is the deadline" stays true:
+  the deadline never moves, the notice moves earlier.

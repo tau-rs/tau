@@ -637,6 +637,13 @@ through the two verbs.
   `Overdue` on the same driver, not "the second in a row". No kernel
   change; the reference policy in `kernel/tests/m3c_supervision.rs` moves
   with it. Details after the 2026-09-20 entry, below.
+- **2026-09-26** — [ADR-0015](0015-wall-grace-is-clock-policy.md)
+  ([#197](https://github.com/tau-rs/tau/issues/197)): a wall-exhaustion
+  grace is a policy of the clock source issued through
+  `cancel_from_harness`, so its notice is `from: harness` and §8's
+  objection to that sender does not reach it: harness code, the clock
+  policy, wrote the `Cancelled` entry. `Endpoint::Kernel` stays the sender
+  of `Unanswered` alone. No kernel change.
 
 ### Why the first row did not survive
 
