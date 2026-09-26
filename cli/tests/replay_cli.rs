@@ -22,13 +22,14 @@ use tau_kernel::abi::{SnapshotHeader, ABI};
 use tau_kernel::log::Log;
 use tau_kernel::reducer::{fold, State, FOLD};
 
-/// The corpus lives at the repository root, not under `kernel/`.
+/// The corpus lives at the repository root, not under `cli/`.
 fn corpus() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../corpus")
 }
 
+/// The milestone fixtures are the kernel's; the binary is only their reader.
 fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../kernel/tests/fixtures")
 }
 
 /// The smallest corpus log: the one every failure test is derived from.
