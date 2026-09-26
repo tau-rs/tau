@@ -1,0 +1,10 @@
+{"tau":"header","v":1,"cli":"codex","version":"0.157.1","recorded_at":"2026-09-26","run":"5-resume-workspace-write","source":"#128 §4b: the same resume with -c sandbox_mode=\"workspace-write\"; the resumed thread works in the resumer's cwd, not the thread's original one","argv":["codex","-a","never","exec","resume","01a0dd5a-ff32-7853-90d2-7362de945134","--json","--output-schema","drivers/tests/fixtures/agent/envelope-schema.json","--skip-git-repo-check","-c","sandbox_mode=\"workspace-write\"","Also write bye.txt containing bye"],"scrubbed":["argv: the --output-schema path made repo-relative"]}
+{"tau":"stdin_closed"}
+{"tau":"stdout","at_ms":410,"line":{"type":"thread.started","thread_id":"01a0dd5a-ff32-7853-90d2-7362de945134"}}
+{"tau":"stdout","at_ms":420,"line":{"type":"turn.started"}}
+{"tau":"stdout","at_ms":5390,"line":{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll create `bye.txt` in the current workspace with the requested contents."}}}
+{"tau":"stdout","at_ms":5730,"line":{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"printf 'bye' > bye.txt\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}}
+{"tau":"stdout","at_ms":5730,"line":{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"printf 'bye' > bye.txt\"","aggregated_output":"","exit_code":0,"status":"completed"}}}
+{"tau":"stdout","at_ms":7960,"line":{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"{\"artifacts\":[{\"kind\":\"file\",\"path\":\"bye.txt\"}],\"assumptions\":[],\"error\":null,\"events\":[],\"status\":\"ok\",\"summary\":\"Created bye.txt containing bye.\"}"}}}
+{"tau":"stdout","at_ms":7980,"line":{"type":"turn.completed","usage":{"input_tokens":72300,"cached_input_tokens":54272,"cache_write_input_tokens":0,"output_tokens":333,"reasoning_output_tokens":42}}}
+{"tau":"exit","code":0,"elapsed_ms":8360,"stderr":"","files":{"bye.txt":"bye"}}
