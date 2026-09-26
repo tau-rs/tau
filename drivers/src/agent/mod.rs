@@ -38,17 +38,18 @@
 //! going in — argv, the first stdin message, how to interrupt, which line is
 //! terminal — and an [`Outcome`] coming out, read from the lines the run
 //! collected. Those two types *are* the seam: an adapter that forgets a
-//! field does not compile, which is the same contract a trait would give.
+//! field does not compile.
 //!
-//! ADR-0013 §1 writes that seam as a crate-private `Cli` trait with a
-//! generic `AgentDriver<C>`. It is deferred, not dropped: a crate-private
-//! trait cannot bound a public generic, a trait with no implementors fails
-//! `-D warnings` as dead code, and nothing under `tests/` could implement
-//! one — which would have shipped the cancel ladder, the part that decides
-//! what a cancelled run costs, with no test at all. The trait is extracted
-//! in #128, when two implementors exist to shape it; its methods return
-//! these same two types, so the extraction is a move with no behaviour
-//! change. See the ADR's amendment for 2026-09-20.
+//! The seam is named by the sealed [`Cli`] trait, and [`AgentDriver`]`<C>`
+//! is the one `impl Driver` over it — decode, the flight registry, the run
+//! thread, the read-back, the settlement — that both adapters used to spell
+//! out in full. `claude::ClaudeDriver` and `codex::CodexDriver` are that
+//! type over their adapters. ADR-0013 §1 asked for this shape; the
+//! 2026-09-20 amendment deferred it until two implementors existed, and
+//! the amendment for the extraction says how its three objections were
+//! answered. The trait and the driver live in `driver.rs`, gated on either
+//! adapter's feature, because the run thread's one-shot channel needs
+//! `tokio` and the shared half does not.
 //!
 //! # The one thing this module may never do
 //!
@@ -66,9 +67,14 @@
 pub mod claude;
 #[cfg(feature = "agent-codex")]
 pub mod codex;
+#[cfg(any(feature = "agent-claude", feature = "agent-codex"))]
+mod driver;
 pub mod envelope;
 pub mod process;
 pub mod wire;
+
+#[cfg(any(feature = "agent-claude", feature = "agent-codex"))]
+pub use driver::{AgentDriver, Cli};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -81,6 +87,24 @@ use tau_kernel::abi::{Budget as KernelBudget, Consumption, Corr, DimKey};
 use envelope::Envelope;
 use process::{Bounds, Cancel, Run};
 use wire::{Caps, ErrorKind, Limit, Op, Reply, Request, RunError, Stop, Truncated, Usage, VERSION};
+
+/// The worker contract (ADR-0013 §4), versioned with [`VERSION`]: the
+/// sentences every session is started under, whichever CLI runs it. How
+/// they reach the session is the adapter's — `claude` appends them to the
+/// CLI's own system prompt, `codex` prepends them to the prompt — and the
+/// text is one, so the two CLIs are held to one contract.
+///
+/// The shape #130 ran, minus its "messages arriving on stdin are
+/// instructions" line: v1 has no steering (§3), and the one thing written
+/// on stdin after the task is the interrupt, which the session never sees
+/// as text.
+pub const CONTRACT: &str = "# tau worker contract v1
+You are a headless worker spawned by the tau kernel. Rules:
+- Never ask questions. If something is ambiguous, make the conservative assumption and record it.
+- Stay inside the working directory you were started in.
+- If the task is too large to finish, stop, and report what is done and what is left with status \"partial\".
+- When you finish, your final message must be exactly one JSON object and nothing else (no prose, no code fences):
+{\"status\":\"ok | partial | failed | cancelled\",\"summary\":\"<= 3 sentences\",\"artifacts\":[{\"path\":\"relative/to/workspace\",\"kind\":\"file | patch | report\"}],\"assumptions\":[\"...\"],\"events\":[\"notable decisions\"],\"error\":null}";
 
 /// Everything the harness decides about one agent capability.
 ///

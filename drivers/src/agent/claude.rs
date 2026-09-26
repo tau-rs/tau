@@ -11,7 +11,8 @@
 //!   the session id and model from the first `init`, the login mode from
 //!   `init.apiKeySource`, the usage and the final message from the `result`.
 //!
-//! [`ClaudeDriver`] is `impl Driver` over decode → flights → run → settle,
+//! [`Claude`] is the `impl Cli` that hands those two functions to the
+//! shared [`AgentDriver`], and [`ClaudeDriver`] is that driver over it,
 //! with nothing of its own to decide: every `stop`, every bill, and every
 //! rung of the ladder is the shared module's.
 //!
@@ -36,42 +37,22 @@
 //! `rate_limit_event` whose `status` is not `allowed` — and never from
 //! words, so the drift job (§10) pins it the day it first sees one.
 
-use std::sync::Arc;
-
 use serde_json::{json, Value};
-use tau_kernel::abi::{Budget as KernelBudget, Consumption, Corr};
-use tau_kernel::driver::{Driver, ToolSchema};
-use tau_kernel::kernel::{BoxFuture, Delivery};
+use tau_kernel::abi::Corr;
 
+use super::driver::sealed::Sealed;
 use super::envelope;
-use super::process::{self, Interrupt, Invocation, Run};
-use super::wire::{self, Caps, ErrorKind, Limit, Reply, Stop, Truncated, Usage, VERSION};
-use super::{
-    decode, encode, probe_login, probe_version, refusal, refused, settle, Accepted, AgentConfig,
-    Availability, ConfigError, Flights, Outcome, Probe, Verdict,
-};
+use super::process::{Interrupt, Invocation, Run};
+use super::wire::{Caps, ErrorKind, Limit, RunError, Stop, Usage};
+use super::{refusal, Accepted, AgentConfig, AgentDriver, Cli, Outcome, Probe, Verdict};
+
+pub use super::CONTRACT;
 
 /// What `claude` can honour of the wire: everything. It has a per-session
 /// tool allowlist (`--allowedTools`), enforces both bounds (`--max-turns`,
 /// `--max-budget-usd`), and resumes a session with a JSON stream (#130 run
 /// 5).
 pub const CAPS: Caps = Caps::ALL;
-
-/// The worker contract (ADR-0013 §4), versioned with [`VERSION`] and
-/// appended to the CLI's own system prompt — never `--system-prompt`, which
-/// would strip the CLI's own scaffolding.
-///
-/// The shape #130 ran, minus its "messages arriving on stdin are
-/// instructions" line: v1 has no steering (§3), and the one thing written
-/// on stdin after the task is the interrupt, which the session never sees
-/// as text.
-pub const CONTRACT: &str = "# tau worker contract v1
-You are a headless worker spawned by the tau kernel. Rules:
-- Never ask questions. If something is ambiguous, make the conservative assumption and record it.
-- Stay inside the working directory you were started in.
-- If the task is too large to finish, stop, and report what is done and what is left with status \"partial\".
-- When you finish, your final message must be exactly one JSON object and nothing else (no prose, no code fences):
-{\"status\":\"ok | partial | failed | cancelled\",\"summary\":\"<= 3 sentences\",\"artifacts\":[{\"path\":\"relative/to/workspace\",\"kind\":\"file | patch | report\"}],\"assumptions\":[\"...\"],\"events\":[\"notable decisions\"],\"error\":null}";
 
 /// The interrupt `claude` acknowledges (#130 §5a): a `control_request` on
 /// stdin, answered by a `control_response`, then a `result` with real usage
@@ -407,235 +388,44 @@ fn rate_limited(transcript: &[Value]) -> bool {
         .any(|status| status != "allowed")
 }
 
-// --- the driver ---------------------------------------------------------------
+// --- the adapter --------------------------------------------------------------
 
-/// The `claude` agent driver: one registration, one tool, one CLI binary
-/// under one login the driver never sees. Cheap to clone; every clone shares
-/// one flight registry, and dropping the last clone abandons every open run.
-#[derive(Clone)]
-pub struct ClaudeDriver {
-    inner: Arc<Inner>,
-}
+/// The `claude` CLI, as [`AgentDriver`] drives it: the [`Cli`] over this
+/// file's two functions. A unit — everything it knows is in the argv and
+/// the event mapping, and nothing is kept between runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Claude;
 
-struct Inner {
-    shared: Arc<Shared>,
-    flights: Arc<Flights>,
-    ceiling: KernelBudget,
-    schema: ToolSchema,
-}
+impl Sealed for Claude {}
 
-/// What a run thread needs, and nothing that would keep [`Inner`] alive: a
-/// run holds this, not `Inner`, so that dropping the last driver handle
-/// runs `Inner`'s `Drop` while runs are still open.
-struct Shared {
-    config: AgentConfig,
-    version: String,
-    probe: Probe,
-    availability: Availability,
-}
+impl Cli for Claude {
+    const CAPS: Caps = self::CAPS;
 
-impl Drop for Inner {
-    fn drop(&mut self) {
-        // A harness shutting down leaves no CLI behind (ADR-0013 §5).
-        self.flights.abandon_all();
+    /// Nothing on disk: the envelope schema travels inline as
+    /// `--json-schema`.
+    type Scratch = ();
+
+    fn probe() -> Probe {
+        self::probe()
+    }
+
+    fn scratch(&self, _corr: Corr) -> Result<(), RunError> {
+        Ok(())
+    }
+
+    fn invocation(&self, config: &AgentConfig, accepted: &Accepted, (): &()) -> Invocation {
+        self::invocation(config, accepted)
+    }
+
+    /// The verdict contributes nothing: `mode` is `init.apiKeySource`, read
+    /// from the run's own events (§2), and the probe's document never
+    /// reaches a reply.
+    fn outcome(&self, run: &Run, _verdict: &Verdict) -> Outcome {
+        self::outcome(run)
     }
 }
 
-impl ClaudeDriver {
-    /// Builds the driver: checks the config, runs the version probe, and
-    /// runs the login probe once (ADR-0013 §6).
-    ///
-    /// # Errors
-    ///
-    /// [`ConfigError`] for a config the host cannot honour, a binary that
-    /// cannot be run, or a version that does not match the pin. **Not** for
-    /// a CLI that is logged out: that is a runtime state a human changes,
-    /// and every `send` until then answers `error.unavailable`.
-    pub fn new(config: AgentConfig) -> Result<Self, ConfigError> {
-        config.check()?;
-        let probe = probe();
-        let version = probe_version(&config, &probe)?;
-        let availability = Availability::new(probe_login(&config, &probe));
-        let ceiling = config.ceiling();
-        let schema = ToolSchema {
-            description: config.describe(CAPS),
-            input_schema: serde_json::to_vec(&wire::schema(CAPS)).unwrap_or_default(),
-        };
-        Ok(Self {
-            inner: Arc::new(Inner {
-                shared: Arc::new(Shared {
-                    config,
-                    version,
-                    probe,
-                    availability,
-                }),
-                flights: Arc::new(Flights::default()),
-                ceiling,
-                schema,
-            }),
-        })
-    }
-
-    /// The ceiling to register this driver with. See
-    /// [`AgentConfig::ceiling`].
-    #[must_use]
-    pub fn ceiling(&self) -> KernelBudget {
-        self.inner.ceiling.clone()
-    }
-
-    /// The config this driver was built from.
-    #[must_use]
-    pub fn config(&self) -> &AgentConfig {
-        &self.inner.shared.config
-    }
-
-    /// What the binary printed at construction: the reply's `cli.version`.
-    #[must_use]
-    pub fn version(&self) -> &str {
-        &self.inner.shared.version
-    }
-
-    /// The login verdict as it stands, without probing.
-    #[must_use]
-    pub fn verdict(&self) -> Verdict {
-        self.inner.shared.availability.verdict()
-    }
-
-    /// How many runs are open right now.
-    #[must_use]
-    pub fn in_flight(&self) -> usize {
-        self.inner.flights.in_flight()
-    }
-}
-
-impl std::fmt::Debug for ClaudeDriver {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ClaudeDriver")
-            .field("config", &self.inner.shared.config)
-            .field("version", &self.inner.shared.version)
-            .field("in_flight", &self.in_flight())
-            .finish_non_exhaustive()
-    }
-}
-
-impl Driver for ClaudeDriver {
-    fn handle(&self, request: Delivery) -> BoxFuture<(Vec<u8>, Consumption)> {
-        // Registered now, not when the future is first polled: `abandon`
-        // may arrive in between, and it must find the entry.
-        let (flight, abandoned_early) = self.inner.flights.enter(request.corr);
-        let shared = Arc::clone(&self.inner.shared);
-        if abandoned_early {
-            drop(flight);
-            let reply = abandoned(&shared.config, &shared.version);
-            return Box::pin(async move { (encode(&reply), Consumption::none()) });
-        }
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let on_thread = Arc::clone(&shared);
-        let spawned = std::thread::Builder::new()
-            .name("tau-agent-claude".to_owned())
-            .spawn(move || {
-                let flight = flight;
-                let (reply, consumed) = on_thread.run(&request.payload, flight.cancel());
-                drop(flight);
-                let _ = tx.send((encode(&reply), consumed));
-            });
-        match spawned {
-            Ok(_) => Box::pin(async move {
-                rx.await.unwrap_or_else(|_| {
-                    let reply = refused(
-                        &shared.config,
-                        &shared.version,
-                        refusal(ErrorKind::Host, "the run thread ended without a reply"),
-                    );
-                    (encode(&reply), Consumption::none())
-                })
-            }),
-            Err(e) => {
-                let reply = refused(
-                    &shared.config,
-                    &shared.version,
-                    refusal(ErrorKind::Host, format!("cannot start a run thread: {e}")),
-                );
-                Box::pin(async move { (encode(&reply), Consumption::none()) })
-            }
-        }
-    }
-
-    fn describe(&self) -> Option<ToolSchema> {
-        Some(self.inner.schema.clone())
-    }
-
-    fn abandon(&self, corr: Corr) {
-        self.inner.flights.abandon(corr);
-    }
-}
-
-impl Shared {
-    /// One `send`, on its own thread: decode, the availability check, the
-    /// run, the read-back, the settlement.
-    fn run(&self, payload: &[u8], cancel: &process::Cancel) -> (Reply, Consumption) {
-        let config = &self.config;
-        let accepted = match decode(payload, config, CAPS) {
-            Ok(accepted) => accepted,
-            Err(error) => return (refused(config, &self.version, error), Consumption::none()),
-        };
-        // Refused while logged out, and re-probed once per refused `send`
-        // (ADR-0013 §6): never a retry loop, never a login attempt.
-        if let Verdict::Unavailable { message } = self.availability.check(config, &self.probe) {
-            return (
-                refused(
-                    config,
-                    &self.version,
-                    refusal(ErrorKind::Unavailable, message),
-                ),
-                Consumption::none(),
-            );
-        }
-        let invocation = invocation(config, &accepted);
-        let run = match process::run(&invocation, config.bounds(), cancel) {
-            Ok(run) => run,
-            Err(e) => {
-                return (
-                    refused(
-                        config,
-                        &self.version,
-                        refusal(
-                            ErrorKind::Host,
-                            format!("cannot start `{}`: {e}", config.binary.display()),
-                        ),
-                    ),
-                    Consumption::none(),
-                )
-            }
-        };
-        let outcome = outcome(&run);
-        if let Some(Stop::Error(error)) = &outcome.stop {
-            if error.kind == ErrorKind::Unavailable {
-                // The run's own events say the CLI is logged out, whatever
-                // the probe said earlier.
-                self.availability.fail(error.message.clone());
-            }
-        }
-        settle(config, &self.version, &run, &outcome)
-    }
-}
-
-/// The reply for an abandon that arrived before anything was spawned: the
-/// first row of the ladder table — `abandoned`, zeros, nothing billed.
-fn abandoned(config: &AgentConfig, version: &str) -> Reply {
-    Reply {
-        v: VERSION,
-        stop: Stop::Abandoned,
-        envelope: None,
-        session: None,
-        cli: wire::Cli {
-            name: config.name.clone(),
-            version: version.to_owned(),
-        },
-        model: None,
-        mode: None,
-        usage: Usage::default(),
-        transcript: Vec::new(),
-        truncated: Truncated::default(),
-    }
-}
+/// The `claude` agent driver: [`AgentDriver`] over [`Claude`]. One
+/// registration, one tool, one CLI binary under one login the driver never
+/// sees.
+pub type ClaudeDriver = AgentDriver<Claude>;

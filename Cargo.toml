@@ -78,3 +78,13 @@ expect_used        = "deny"
 panic              = "deny"
 indexing_slicing    = "deny"
 integer_division    = "deny"
+
+[workspace.lints.rustdoc]
+# The module docs are where the reasoning lives, and the reasoning names the
+# private items it is about (`Inner::commit`, `DriverSlot`, `Canonical`). In
+# the public rendering those links fall back to plain code spans, which is
+# what this lint warns about; under `--document-private-items` they resolve.
+# Rewriting them as code spans would lose the link in the build that has
+# them. The lint fires under `-D warnings` in both builds, so it is allowed
+# here rather than in each doc comment.
+private_intra_doc_links = "allow"

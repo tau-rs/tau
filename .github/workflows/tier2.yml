@@ -492,9 +492,24 @@ jobs:
           # deferred SIGTERM misses the abandon grace. That leg is
           # `asan+lsan (sandbox)` below, with its own flags; this job stays
           # the scheduler's.
+          #
+          # The same deferral, without the fence, is why the three binaries
+          # that signal `tau-fake-cli` are out too (#227). TSan hands an
+          # asynchronous signal to its handler only when the receiving
+          # thread leaves an intercepted libc call; the fake's main thread
+          # waits on a Rust channel, a raw futex the runtime never sees, so
+          # a SIGINT or SIGTERM sent to the instrumented fake sits pending
+          # until something else wakes that thread — a test waiting on the
+          # fake's answer waits for good, and a ladder rung times out into
+          # the next. The #182 readiness marker cannot help: the handler is
+          # installed, the delivery is what never comes. `agent_ladder`
+          # stays: its children are `/bin/sh`, uninstrumented, and it is
+          # the ladder itself under TSan. What the excluded three prove
+          # (the fake's own contract, and the `claude` and `codex` drivers
+          # climbing it) the `ci` profile proves on every pull request.
           cargo +nightly nextest run --locked -Zbuild-std \
             -p tau-kernel -p libtau -p tau-drivers --all-features --profile ci \
-            -E 'not binary(/^sandbox_/)' \
+            -E 'not binary(/^sandbox_/) and not binary(/^agent_(fake_cli|claude_ladder|codex_ladder)$/)' \
             --target "$SAN_TARGET" 2>&1 | tee tsan.log
           {
             echo "## tsan (scheduler)"

@@ -19,10 +19,10 @@
 //! carrying on with a log and a state that disagree.
 //!
 //! The blob store is held to the same line. Its writes cannot be refused by
-//! their caller (ADR-0012 §1), so [`Inner::put_blob`] asks
-//! [`Blobs::fault`](crate::blob::Blobs::fault) after each one and faults the
-//! run on the first failure, leaving the entry unwritten: a log that names a
-//! payload the store never held is a log that cannot be believed.
+//! their caller (ADR-0012 §1), so [`Inner::put_blob`] asks [`Blobs::fault`]
+//! after each one and faults the run on the first failure, leaving the entry
+//! unwritten: a log that names a payload the store never held is a log that
+//! cannot be believed.
 //!
 //! # Cancel, in two phases
 //!
