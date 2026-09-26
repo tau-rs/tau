@@ -357,8 +357,9 @@ on the writer's behalf vanishes with the process, so a crashed writer
 leaves nothing to detect and the layout above gains no file. Every `Disk`
 is a writer — every one implements `put` and `shred` — so `tau blobs`
 contends like `tau shred` does and is refused beside a running kernel; a
-read-only view that need not is a follow-on, if an operator ever needs to
-inspect a store while its kernel runs.
+read-only view that need not is a follow-on
+([#234](https://github.com/tau-rs/tau/issues/234)), if an operator ever
+needs to inspect a store while its kernel runs.
 
 ### 5. What replay and snapshots need from the store
 
@@ -614,7 +615,7 @@ crate says what it is.
   exclusive one and so buys nothing over none, and none would let a type
   that can write open a store it must not write to. Two honest
   consequences: `tau blobs` cannot inspect a store while its kernel runs
-  (a read-only view is a follow-on), and two `Disk`s in one process on
+  (a read-only view is #234), and two `Disk`s in one process on
   one directory — which nothing does on purpose — now refuse where they
   used to race. Nothing enters `kernel/src/abi/`: no `ABI` bump, no
   snapshot, sidecar, `PINNED` or `FOLD` moves. The tests are listed in §6.

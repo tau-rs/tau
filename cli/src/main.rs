@@ -47,7 +47,8 @@
 //! holds the directory *now*, while the log on disk lags a live kernel, so
 //! the fold's live check is only consulted once nobody holds the store.
 //! `blobs` is refused too, although it only reads: a `Disk` cannot promise
-//! not to write, and a read-only view is a follow-on if an operator needs
+//! not to write, and a read-only view is a follow-on
+//! ([#234](https://github.com/tau-rs/tau/issues/234)) if an operator needs
 //! to inspect a running store.
 //!
 //! Neither verb initialises a store: a path with no `STORE` header is
