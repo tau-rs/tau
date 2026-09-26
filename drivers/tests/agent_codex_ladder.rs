@@ -79,6 +79,9 @@ async fn an_ignored_sigint_reaches_sigterm_and_bills_the_ceiling() {
     let ready = dir.path().join("ready");
     directives.insert(0, json!({ "touch": ready }));
     directives.insert(1, json!({ "on": { "signal": "SIGINT" }, "ignore": true }));
+    // The supervisor gives this CLI no stdin (run 8): end of file at spawn
+    // is not what ends it.
+    directives.insert(2, json!({ "on": { "eof": true }, "ignore": true }));
     let script = agent::script(dir.path(), "3-sigterm", &directives);
     let driver = driver(dir.path(), &script, 20_000, 300);
     let (reply, consumed) = abandoned_run(&driver, &ready).await;
@@ -115,6 +118,7 @@ async fn a_cli_that_ignores_sigterm_too_is_killed_and_the_run_is_lost() {
         &[
             json!({ "line": { "type": "thread.started", "thread_id": "t-1" } }),
             json!({ "touch": ready }),
+            json!({ "on": { "eof": true }, "ignore": true }),
             json!({ "on": { "signal": "SIGINT" }, "ignore": true }),
             json!({ "on": { "signal": "SIGTERM" }, "ignore": true }),
         ],

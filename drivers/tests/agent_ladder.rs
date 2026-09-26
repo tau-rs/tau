@@ -25,6 +25,9 @@ use tau_drivers::agent::process::{self, Cancel, Ending, Interrupt, Rung};
 
 const INIT: &str = r#"printf '{"type":"system","subtype":"init","session_id":"affe155e"}\n'"#;
 const RESULT: &str = r#"printf '{"type":"result","subtype":"success","num_turns":3}\n'"#;
+/// Reads one line of stdin and says whether it got one or end of file.
+const READ_STDIN: &str =
+    r#"if read -r line; then printf '{"type":"got"}\n'; else printf '{"type":"eof"}\n'; fi"#;
 
 #[test]
 fn a_run_that_ends_on_its_own_is_completed_with_its_terminal_event() {
@@ -76,6 +79,54 @@ fn the_task_arrives_on_stdin_and_stdin_closes_when_the_terminal_event_lands() {
     assert_eq!(
         run.transcript()[0]["task"],
         "write hello.txt containing hello"
+    );
+    assert!(run.terminal_seen());
+}
+
+/// A child the driver will never speak to — no task on stdin, a signal for
+/// the interrupt — gets no stdin at all rather than an open pipe. `codex
+/// exec` reads a piped stdin to end of file before it starts (#223,
+/// codex-0.157.1 run 8) and would have waited on the driver for the whole
+/// wall bound.
+#[test]
+fn a_child_that_is_never_spoken_to_gets_no_stdin_to_wait_on() {
+    let dir = agent::Temp::new("nostdin");
+    // `read` returns at once on end of file; on an open pipe it would block
+    // until the wall bound.
+    let invocation = agent::sh(
+        &format!("{READ_STDIN}; {RESULT}"),
+        dir.path(),
+        agent::result_line,
+    );
+    let run = process::run(&invocation, agent::bounds(2_000, 200), &Cancel::default()).unwrap();
+    assert_eq!(run.ending, Ending::Completed, "it did not wait on us");
+    assert_eq!(run.transcript()[0]["type"], "eof");
+    assert!(run.terminal_seen());
+}
+
+/// The other half of the rule: a child that *may* be spoken to keeps its
+/// pipe. With an in-band interrupt and nothing to say yet, `read` blocks
+/// until the wall bound climbs the ladder and the interrupt arrives on that
+/// very pipe.
+#[test]
+fn a_child_that_may_be_spoken_to_keeps_its_stdin() {
+    let dir = agent::Temp::new("stdin-kept");
+    let mut invocation = agent::sh(
+        &format!("{READ_STDIN}; {RESULT}"),
+        dir.path(),
+        agent::result_line,
+    );
+    invocation.interrupt = Interrupt::InBand(agent::INTERRUPT.to_owned());
+    let run = process::run(&invocation, agent::bounds(500, 1_000), &Cancel::default()).unwrap();
+    assert_eq!(
+        run.ending,
+        Ending::WallLimit(Rung::Interrupt),
+        "it waited on the pipe until the wall bound"
+    );
+    assert_eq!(
+        run.transcript()[0]["type"],
+        "got",
+        "the interrupt arrived on the pipe it kept"
     );
     assert!(run.terminal_seen());
 }

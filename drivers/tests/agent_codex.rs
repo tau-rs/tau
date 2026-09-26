@@ -42,6 +42,11 @@ use tau_kernel::kernel::Delivery;
 
 use codex::{CodexStub, MODE, PIN, THREAD_HELLO, VERSION};
 
+/// The thread run 8 started.
+const THREAD_STDIN_HELD: &str = "01a0dda4-31a4-7272-8c4a-fe545cb8628e";
+/// The thread id run 9 asked to resume, which no rollout matched.
+const UNKNOWN_THREAD: &str = "00000000-0000-0000-0000-000000000000";
+
 /// The stub and a driver over it, replaying `script`, rooted at `dir`.
 fn driver(dir: &Path, script: &Path) -> (CodexStub, CodexDriver) {
     let stub = CodexStub::new(dir);
@@ -210,6 +215,58 @@ fn the_fixed_argv_is_the_adrs_then_the_config_then_the_op() {
     assert!(!args.iter().any(|a| a.contains(CONTRACT)));
 }
 
+/// Runs 8 and 9 were recorded with the driver's own fixed argv, in the
+/// driver's order: `invocation` reproduces each transcript's `argv`
+/// exactly, the schema path and the workspace aside.
+#[test]
+fn runs_8_and_9_were_recorded_with_the_drivers_own_argv() {
+    let dir = agent::Temp::new("argv-recorded");
+    let stub = CodexStub::new(dir.path());
+    let script = agent::script(dir.path(), "none", &[json!({ "exit": 0 })]);
+    let config = stub.config(&script, dir.path());
+    let schema = Path::new("drivers/tests/fixtures/agent/envelope-schema.json");
+    let recorded = |run: &str| -> Vec<String> {
+        let records = agent::transcript(PIN, run);
+        records[0]["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .skip(1)
+            .map(|a| a.as_str().unwrap().to_owned())
+            .collect()
+    };
+
+    let mut argv = recorded("8-stdin-held");
+    let cd = args_after(&argv, "--cd");
+    argv[cd] = dir.path().display().to_string();
+    let run = accepted(
+        &config,
+        json!({ "op": "run", "task": "write hello.txt containing hello" }),
+    );
+    assert_eq!(
+        adapter::invocation(&config, &run, schema).args,
+        argv,
+        "run 8"
+    );
+
+    let resume = accepted(
+        &config,
+        json!({ "op": "resume", "session": UNKNOWN_THREAD, "task": "Also write bye.txt containing bye" }),
+    );
+    assert_eq!(
+        adapter::invocation(&config, &resume, schema).args,
+        recorded("9-resume-unknown"),
+        "run 9"
+    );
+}
+
+fn args_after(args: &[String], flag: &str) -> usize {
+    args.iter()
+        .position(|a| a == flag)
+        .unwrap_or_else(|| panic!("{flag} in {args:?}"))
+        + 1
+}
+
 #[test]
 fn the_terminal_line_is_a_turn_end_and_nothing_that_merely_mentions_one() {
     let dir = agent::Temp::new("terminal");
@@ -345,6 +402,18 @@ fn every_transcript_maps_as_the_adr_table_says() {
             Some(Status::Ok),
             Some("01a0dd62-f233-7530-a98a-07290cff0995"),
         ),
+        (
+            PIN,
+            "8-stdin-held",
+            None,
+            27_862,
+            124,
+            Some(Status::Ok),
+            Some(THREAD_STDIN_HELD),
+        ),
+        // Nothing on stdout: `outcome` sees nothing, and the driver refuses
+        // before it is asked (`an_unknown_thread_is_a_provider_error…`).
+        (PIN, "9-resume-unknown", None, 0, 0, None, None),
         (
             "codex-0.46.0",
             "1-hello",
@@ -643,6 +712,93 @@ async fn a_run_that_ends_without_its_turn_end_is_lost_at_the_ceiling() {
         consumed.get(&DimKey::CostMicroUsd),
         None,
         "no cost ceiling without a cost bound or prices"
+    );
+}
+
+/// Run 8: `codex exec` reads a piped stdin to end of file before it
+/// starts — the recording printed nothing until the runner closed the
+/// pipe. The stub reads its stdin the same way, so this run completes only
+/// because the supervisor gives a child it will never speak to no stdin at
+/// all (ADR-0013 §7, the stdin row).
+#[tokio::test]
+async fn a_held_stdin_is_never_the_drivers_because_exec_gets_none() {
+    let held = agent::transcript(PIN, "8-stdin-held");
+    let closed_at = held.iter().find(|r| r["tau"] == "stdin_closed").unwrap()["at_ms"]
+        .as_u64()
+        .unwrap();
+    let first_out = held.iter().find(|r| r["tau"] == "stdout").unwrap()["at_ms"]
+        .as_u64()
+        .unwrap();
+    assert!(
+        closed_at >= 5_000 && first_out > closed_at,
+        "the recording: nothing printed until stdin closed at {closed_at} ms, then {first_out} ms"
+    );
+
+    let dir = agent::Temp::new("stdin-held");
+    let script = codex::replay_script(dir.path(), PIN, "8-stdin-held");
+    let (_stub, driver) = driver(dir.path(), &script);
+    let (reply, consumed) = send(
+        &driver,
+        8,
+        codex::run_payload("write hello.txt containing hello"),
+    )
+    .await;
+    assert_eq!(reply.stop, Stop::Done);
+    assert_eq!(reply.envelope.unwrap().status, Status::Ok);
+    assert_eq!(reply.session.as_deref(), Some(THREAD_STDIN_HELD));
+    assert_eq!(consumed.get(&DimKey::Tokens), Some(27_862 + 124));
+}
+
+/// Run 9: a `resume` of a thread the CLI has no rollout for prints nothing
+/// and exits 1 with the reason on stderr. No thread was started, so it is
+/// `error.provider` with the CLI's text (ADR-0013 §2's `session` row),
+/// billed at nothing — not `error.lost` at the ceiling.
+#[tokio::test]
+async fn an_unknown_thread_is_a_provider_error_billed_at_nothing() {
+    let dir = agent::Temp::new("unknown");
+    let records = agent::transcript(PIN, "9-resume-unknown");
+    assert!(
+        agent::transcript_stdout(&records).is_empty(),
+        "nothing on stdout: no thread was started"
+    );
+    let stderr = records.last().unwrap()["stderr"]
+        .as_str()
+        .unwrap()
+        .trim()
+        .to_owned();
+    let script = codex::replay_script(dir.path(), PIN, "9-resume-unknown");
+    let stub = CodexStub::new(dir.path());
+    let mut config = stub.config(&script, dir.path());
+    config
+        .env
+        .push((codex::REFUSE_VAR.to_owned(), stderr.clone()));
+    let driver = CodexDriver::new(config).unwrap();
+    let (reply, consumed) = send(
+        &driver,
+        9,
+        codex::resume_payload(UNKNOWN_THREAD, "Also write bye.txt containing bye"),
+    )
+    .await;
+    let (kind, message) = error_of(&reply);
+    assert_eq!(kind, ErrorKind::Provider);
+    assert!(message.contains(&stderr), "{message}");
+    assert!(
+        message.contains("exited 1 before starting a thread"),
+        "{message}"
+    );
+    assert_eq!(reply.session, None);
+    assert_eq!(reply.transcript, Vec::<Value>::new());
+    assert_eq!(
+        consumed.get(&DimKey::Tokens),
+        None,
+        "nothing reached the provider"
+    );
+    assert_eq!(
+        driver.verdict(),
+        Verdict::Ready {
+            mode: Some(MODE.to_owned())
+        },
+        "a refused resume says nothing about the login"
     );
 }
 

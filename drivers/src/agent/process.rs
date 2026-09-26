@@ -90,6 +90,12 @@ pub struct Invocation {
     /// Written to stdin once, if the CLI takes its task that way. stdin
     /// stays open afterwards, for the interrupt, and is closed when the
     /// terminal line arrives.
+    ///
+    /// When this is `None` **and** the interrupt is a signal, nothing will
+    /// ever be written on stdin, and the child gets none at all
+    /// (`/dev/null`) rather than an open pipe: `codex exec` reads a piped
+    /// stdin to end of file before it starts (#223, codex-0.157.1 run 8),
+    /// and would wait on the driver for the whole wall bound.
     pub first_stdin: Option<String>,
     /// The first rung of the ladder.
     pub interrupt: Interrupt,
@@ -292,6 +298,10 @@ enum Event {
 /// refusal from the host. Nothing ran, so the caller reports `error.host`
 /// and bills nothing.
 pub fn run(invocation: &Invocation, bounds: Bounds, cancel: &Cancel) -> io::Result<Run> {
+    // A child the driver will never speak to gets no stdin at all: a pipe
+    // nobody writes is one a CLI that reads stdin first waits on for ever.
+    let spoken_to =
+        invocation.first_stdin.is_some() || matches!(invocation.interrupt, Interrupt::InBand(_));
     let mut command = Command::new(&invocation.program);
     command
         .args(&invocation.args)
@@ -299,7 +309,11 @@ pub fn run(invocation: &Invocation, bounds: Bounds, cancel: &Cancel) -> io::Resu
         .env_clear()
         .envs(invocation.env.iter().map(|(k, v)| (k, v)))
         .process_group(0)
-        .stdin(Stdio::piped())
+        .stdin(if spoken_to {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command.spawn()?;

@@ -26,8 +26,13 @@
 //!
 //! # What is pinned here, and what is not
 //!
-//! Every mapping below was recorded by #128 on 0.157.1 and is tested against
-//! the committed transcripts under `drivers/tests/cassettes/cli/codex-0.157.1/`.
+//! Every mapping below was recorded by #128 and #223 on 0.157.1 and is
+//! tested against the committed transcripts under
+//! `drivers/tests/cassettes/cli/codex-0.157.1/`. Two of them are the CLI
+//! saying nothing on stdout: `exec` reads a piped stdin to end of file
+//! before it starts (run 8), so the supervisor gives it none; and a
+//! `resume` of a thread the CLI has no rollout for exits 1 with the reason
+//! on stderr (run 9), which is `error.provider` billed at nothing.
 //! Two rows the recording could not reach are read tolerantly and marked
 //! *#128* in the ADR's amendment: the text a `turn.failed` carries when the
 //! CLI is logged out, and when a rate limit or a quota window is hit. Each
@@ -172,6 +177,9 @@ pub fn invocation(config: &AgentConfig, accepted: &Accepted, schema: &Path) -> I
         args,
         cwd: accepted.workspace.clone(),
         env: config.env.clone(),
+        // Nothing is ever written on this CLI's stdin, and the supervisor
+        // gives a child like that none: `exec` reads a piped stdin to end of
+        // file before it starts (run 8).
         first_stdin: None,
         interrupt: Interrupt::Signal,
         terminal: is_turn_end,
@@ -220,7 +228,10 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 ///
 /// A run whose terminal event never arrived gets `stop: None` and whatever
 /// `thread.started` said; the shared `settle` reports `error.lost` and
-/// bills the ceiling regardless of what is here.
+/// bills the ceiling regardless of what is here — except a run that
+/// printed nothing at all and exited non-zero, which the driver refuses
+/// before asking (run 9, an unknown thread: `error.provider`, nothing
+/// billed).
 #[must_use]
 pub fn outcome(run: &Run) -> Outcome {
     let transcript = run.transcript();
@@ -599,6 +610,12 @@ impl Shared {
             }
         };
         drop(schema);
+        if let Some(error) = refused_before_start(&run) {
+            // Run 9: nothing on stdout, exit 1, the reason on stderr. No
+            // thread was started, so nothing reached the provider and
+            // nothing is billed — not `error.lost` at the ceiling.
+            return (refused(config, &self.version, error), Consumption::none());
+        }
         let mut outcome = outcome(&run);
         outcome.mode = mode;
         if let Some(message) = auth_failure(&run) {
@@ -608,6 +625,26 @@ impl Shared {
         }
         settle(config, &self.version, &run, &outcome)
     }
+}
+
+/// A run that ended by itself having printed nothing, with a non-zero
+/// exit: the CLI refused before starting a thread. The reason is on stderr
+/// — run 9's `no rollout found for thread id …` — and the kind is
+/// `provider` (ADR-0013 §2, the `session` row), unless the text names a
+/// login or a limit. `None` for every run that printed anything: a thread
+/// that started may have spent a turn, and the shared `settle` bills it.
+fn refused_before_start(run: &Run) -> Option<wire::RunError> {
+    if run.ending != process::Ending::Completed || !run.lines.is_empty() || run.code() == Some(0) {
+        return None;
+    }
+    let said = run.stderr.trim();
+    let message = match (run.code(), said.is_empty()) {
+        (Some(code), true) => format!("the CLI exited {code} before starting a thread"),
+        (Some(code), false) => format!("the CLI exited {code} before starting a thread: {said}"),
+        (None, true) => "the CLI was signalled before starting a thread".to_owned(),
+        (None, false) => format!("the CLI was signalled before starting a thread: {said}"),
+    };
+    Some(refusal(classify(&message), message))
 }
 
 /// The reply for an abandon that arrived before anything was spawned: the

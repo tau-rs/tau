@@ -853,6 +853,11 @@ pub struct Outcome {
 /// | a signal was needed, or nothing was reported | `abandoned` / `{limit: wall}` | **the ceiling** |
 /// | `SIGKILL` was needed | `error.lost` | **the ceiling** |
 /// | the final message was not an envelope | `error.envelope` | what the CLI reported |
+///
+/// An adapter may answer before this is reached: a run that printed nothing
+/// and exited non-zero never started a session (`codex` #223 run 9, an
+/// unknown thread), and is the adapter's `error.provider`, billed at
+/// nothing.
 #[must_use]
 pub fn settle(
     config: &AgentConfig,

@@ -20,6 +20,7 @@
 //! | `{"on": {"stdin": "<substring>"}, "delay_ms": 0, "lines": [<json>…], "exit": 1}` | when a stdin line containing `<substring>` arrives: after the delay, print the lines, then exit if `exit` is given. |
 //! | `{"on": {"signal": "SIGINT"}, "delay_ms": 0, "lines": [<json>…], "exit": 0}` | the same, for `SIGINT` or `SIGTERM`. |
 //! | `{"on": {"signal": "SIGTERM"}, "ignore": true}` | swallows the signal, so the driver has to reach `SIGKILL`. |
+//! | `{"on": {"eof": true}, "ignore": true}` | end of file on stdin is not an exit: a spent timeline waits for a signal instead. A CLI that never reads stdin as a channel — `codex exec`, which the supervisor gives `/dev/null` — does not end when it closes. `lines` and `exit` react to it the same way as to a stdin line. |
 //! | `{"withhold": "<substring>"}` | never prints a line containing `<substring>`, wherever the script would have printed it. Withholding `"type":"result"` produces a run with no terminal event: `lost`. |
 //! | `{"touch": "<path>", "delay_ms": 0}` | creates (or truncates) the file at `<path>` after the delay. A readiness marker: the signal handlers are installed before the first timeline step runs, so a test that waits for the file before sending a signal knows the signal will be caught, however slowly the binary started. |
 //!
@@ -40,7 +41,8 @@
 //!
 //! When the timeline is spent and stdin has reached end of file, the binary
 //! exits 0, as a CLI does once its parent closes the pipe. While stdin is
-//! open it waits for a stimulus.
+//! open, or when `{"on": {"eof": true}, "ignore": true}` says the close
+//! means nothing, it waits for a stimulus.
 //!
 //! # Example
 //!
@@ -116,6 +118,7 @@ mod fake {
         timeline: VecDeque<Step>,
         on_stdin: Vec<(String, Reaction)>,
         on_signal: BTreeMap<i32, Reaction>,
+        on_eof: Option<Reaction>,
         withhold: Vec<String>,
     }
 
@@ -197,6 +200,7 @@ mod fake {
         let mut script = Script {
             timeline: VecDeque::new(),
             on_stdin: Vec::new(),
+            on_eof: None,
             on_signal: BTreeMap::new(),
             withhold: Vec::new(),
         };
@@ -214,15 +218,20 @@ mod fake {
             if let Some(on) = directive.get("on") {
                 let reaction = reaction_of(&directive).map_err(|e| with(&e))?;
                 match on {
-                    Value::Object(on) => match (on.get("stdin"), on.get("signal")) {
-                        (Some(Value::String(pattern)), None) => {
+                    Value::Object(on) => match (on.get("stdin"), on.get("signal"), on.get("eof")) {
+                        (Some(Value::String(pattern)), None, None) => {
                             script.on_stdin.push((pattern.clone(), reaction));
                         }
-                        (None, Some(Value::String(name))) => {
+                        (None, Some(Value::String(name)), None) => {
                             let signal = signal_named(name).map_err(|e| with(&e))?;
                             script.on_signal.insert(signal, reaction);
                         }
-                        _ => return Err(with("on takes {\"stdin\": …} or {\"signal\": …}")),
+                        (None, None, Some(Value::Bool(true))) => script.on_eof = Some(reaction),
+                        _ => {
+                            return Err(with(
+                                "on takes {\"stdin\": …}, {\"signal\": …} or {\"eof\": true}",
+                            ))
+                        }
                     },
                     other => return Err(with(&format!("on must be an object, got {other}"))),
                 }
@@ -311,10 +320,13 @@ mod fake {
                     .map_err(|_| "every stimulus thread is gone".to_owned())?,
             };
             let reaction = match event {
-                Event::Eof => {
-                    eof = true;
-                    None
-                }
+                Event::Eof => match script.on_eof.clone() {
+                    None => {
+                        eof = true;
+                        None
+                    }
+                    scripted => scripted,
+                },
                 Event::Stdin(line) => script
                     .on_stdin
                     .iter()

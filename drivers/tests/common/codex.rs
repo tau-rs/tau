@@ -33,6 +33,10 @@ pub(crate) const PROBES_VAR: &str = "TAU_TEST_PROBES";
 /// Where the stub writes the argv of the last run it handed to the fake,
 /// NUL-separated (the worker contract spans lines).
 pub(crate) const ARGV_VAR: &str = "TAU_TEST_ARGV";
+/// Set, the stub refuses every run before starting one: that text on
+/// stderr, nothing on stdout, exit 1 — the shape of `exec resume` on a
+/// thread the CLI has no rollout for (run 9).
+pub(crate) const REFUSE_VAR: &str = "TAU_TEST_REFUSE";
 
 /// A stand-in `codex` binary the driver can be *constructed* over.
 ///
@@ -42,7 +46,9 @@ pub(crate) const ARGV_VAR: &str = "TAU_TEST_ARGV";
 /// on **stderr** — and `exec`s the fake for everything else, recording the
 /// argv it was given. `TAU_TEST_LOGIN` names a marker file: present, the
 /// stub is logged in (exit 0); absent, it is logged out (exit 1, a line on
-/// stderr).
+/// stderr). Before handing a run to the fake it reads its stdin to end of
+/// file, as `codex exec` does before it starts (run 8): a driver that held
+/// the pipe open would hold the stub too.
 pub(crate) struct CodexStub {
     pub(crate) binary: PathBuf,
     pub(crate) login: PathBuf,
@@ -67,6 +73,8 @@ impl CodexStub {
                  exit 1 ;;\n\
              esac\n\
              printf '%s\\0' \"$@\" > \"${ARGV_VAR}\"\n\
+             if [ -n \"${REFUSE_VAR}\" ]; then printf '%s\\n' \"${REFUSE_VAR}\" >&2; exit 1; fi\n\
+             cat > /dev/null\n\
              prev=''\n\
              for a in \"$@\"; do\n\
                if [ \"$prev\" = --output-schema ]; then cp \"$a\" \"${ARGV_VAR}.schema\"; fi\n\
