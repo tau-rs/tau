@@ -146,12 +146,20 @@ fn a_cli_that_ignores_every_signal_is_killed_and_the_run_is_lost() {
 #[test]
 fn the_wall_bound_climbs_the_same_ladder() {
     let dir = agent::Temp::new("wall");
+    // `exec`, not a loop of `sleep`s: the process the wall bound reaches is
+    // `sleep` itself, with default handlers, and it dies on the first rung's
+    // SIGINT every time. A shell looping on `sleep 0.05` does not (#182): when
+    // SIGINT lands after the current `sleep` has exited but before the shell
+    // has reaped it, bash 3.2 (`/bin/sh` on macOS) takes the child's clean
+    // exit as "it handled the interrupt" and keeps looping, so the ladder
+    // rightly climbs to SIGTERM and the run ends `WallLimit(Term)`. That
+    // window is microseconds wide and opens once per 50 ms, which is why it
+    // fired once in four full-suite runs and never in isolation.
     let invocation = agent::sh(
-        &format!("{INIT}; while :; do sleep 0.05; done"),
+        &format!("{INIT}; exec sleep 30"),
         dir.path(),
         agent::result_line,
     );
-    // A child with default handlers dies on the first rung's SIGINT.
     let run = process::run(&invocation, agent::bounds(300, 500), &Cancel::default()).unwrap();
     assert_eq!(run.ending, Ending::WallLimit(Rung::Interrupt));
     assert!(!run.terminal_seen());

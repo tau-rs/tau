@@ -31,10 +31,12 @@ fail-fast    = true
 # construction: a rung is only reached once the one below it has been given
 # its grace, so the whole ladder cannot be exercised inside five seconds.
 # The `ci` profile's Linux and macOS jobs run it on every pull request.
+# `agent_claude_ladder` is the same ladder through the `claude` driver.
 # `agent_codex_ladder` is the same ladder through the `codex` driver.
 default-filter = '''
 not binary(sandbox_limits)
 and not binary(agent_ladder)
+and not binary(agent_claude_ladder)
 and not binary(agent_codex_ladder)
 and not test(every_corpus_log_replays_from_each_of_its_snapshots)
 and not test(tau_snapshot_then_tau_replay_from_matches_every_sidecar)
