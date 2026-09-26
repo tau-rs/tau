@@ -875,3 +875,99 @@ neighbour for.
   trait once two implementors exist to shape it; its methods return these
   same two types, so the extraction is a move with no behaviour change.
   §1's file layout is unchanged.
+- **2026-09-26** — The `codex` column is implemented by
+  [#128](https://github.com/tau-rs/tau/issues/128) as
+  `tau_drivers::agent::codex` behind the feature `agent-codex`, on the same
+  seam: `codex::invocation` builds the `process::Invocation`,
+  `codex::outcome` reads the `Outcome`, and `CodexDriver` is `impl Driver`
+  over decode → flights → run → settle. **The pin moved before the lane
+  started**: the brew `codex-cli 0.46.0` of #130 refuses every model for a
+  ChatGPT account (`gpt-5.5` answers "requires a newer version of Codex"),
+  so the transcripts under `drivers/tests/cassettes/cli/codex-0.154.0/`
+  were recorded with the `codex-cli 0.154.0` Conductor ships, and every
+  *#128* row of §7 is pinned there. What moved, none of it the wire:
+  - **`resume` is served.** At 0.154.0, `--json --output-schema
+    --skip-git-repo-check` before `resume <id> "<amendment>"` re-emit
+    `thread.started` with the same id and a `turn.completed` with usage
+    (`4-resume`); the codex `describe()` projects the op. §7's `op:
+    resume` row and §11's "`resume` at `codex`" row are superseded. `Caps`
+    at `codex` are therefore `{ tools: false, budget: false, resume: true
+    }`. A `resume` of a thread the CLI does not know prints nothing, exits
+    1 and says why on stderr (`7-resume-unknown`: `no rollout found for
+    thread id`); no thread was started, so it is `error.provider` billed at
+    nothing, not `error.lost` billed at the ceiling — the one place the
+    adapter decides a bill the shared `settle` would have decided otherwise.
+  - **`--output-schema` is strict structured output**, and the committed
+    envelope schema is refused by the validator behind it (`'oneOf' is not
+    permitted`; `additionalProperties` must be `false` on every object).
+    `codex::output_schema()` projects `envelope::schema()` into that
+    dialect — each `oneOf` of constants becomes an `enum`, with the
+    alternatives' descriptions folded into the property's; every object is
+    closed and all its properties required — writes it to a scratch file
+    at construction, and removes it with the last driver handle. The
+    fixture `envelope-schema.openai-strict.json` is what the runs were
+    recorded with. §4's "`--output-last-message` file first" is not used:
+    with a schema in force **every** `agent_message` is schema-shaped,
+    including the model's opening "Creating hello.txt." one, and the
+    envelope is the *last* `agent_message` of the turn, read from the
+    event stream the reply carries anyway. One fewer scratch file per run.
+  - **A piped stdin is read to end of file before the CLI starts**
+    (`6-stdin-held`: nothing printed for five seconds, then everything).
+    The task is the positional prompt and the interrupt is `SIGINT`, so
+    nothing is ever written on this CLI's stdin, and `process::run` now
+    gives a child like that no stdin at all (`/dev/null`) rather than an
+    open pipe — for every invocation with no first message and a signal
+    interrupt, which is also every probe. `claude`'s invocation, which
+    writes its task on stdin, is unchanged.
+  - **The fixed argv** is `codex -a never exec --json --output-schema
+    <file> --skip-git-repo-check`, then on a `run` `--sandbox <config
+    permission>` `--cd <workspace>` `-m <config model>` `-c
+    model_reasoning_effort=<config effort>` and the prompt (`<contract>\n\n<task>`),
+    and on a `resume` only `resume <session> "<amendment>"`, exactly as
+    recorded. `-m` was parsed live; `-c model_reasoning_effort` was not
+    exercised (the ChatGPT account serves one model) and is a drift-job
+    row. No isolation flag exists at this pin: the child reads
+    `$HOME/.codex/config.toml` and the workspace's `AGENTS.md`, and a
+    harness that wants a clean configuration points `HOME` at a home that
+    holds only a login. The "why `--safe-mode`" row's *#128* is pinned as
+    that sentence.
+  - **The event stream** at 0.154.0 is `thread.started { thread_id }`,
+    `turn.started`, `item.started` / `item.completed` with an `item` of
+    type `agent_message { text }`, `command_execution { command,
+    aggregated_output, exit_code, status }` or `file_change { changes[] }`,
+    `error { message }`, and one of `turn.completed { usage }` or
+    `turn.failed { error { message } }`, which are the terminal events.
+    `session` is `thread_id`; `model` is `null`, because no event names
+    it; `mode` is the one line `codex login status` printed — on **stderr**
+    at this pin, `Logged in using ChatGPT`, with nothing on stdout, so the
+    shared probe now hands `mode_from_login` stderr when stdout is empty.
+  - **`usage`** is `turn.completed.usage`: `input_tokens` +
+    `cache_write_input_tokens` as `input_tokens`, `output_tokens` as
+    `output_tokens`, no cost, no turn count. `cached_input_tokens` is
+    **not** added, against §6's "every input class summed": at this
+    provider it is the cached part *of* `input_tokens` (`1-hello`: 71,179
+    input of which 64,256 cached), and adding it would bill the cache
+    twice. `reasoning_output_tokens` is inside `output_tokens` the same way.
+  - **`error.kind` from `turn.failed`**, by the message: `401`,
+    `Unauthorized` or the words of a logout are `unavailable`; `429`, a
+    rate limit, a usage limit or a quota are `throttled`; anything else is
+    `provider` — `5-model-rejected` pins a 400 (`The 'gpt-5-codex' model is
+    not supported when using Codex with a ChatGPT account`). An `error`
+    event naming `401 Unauthorized` with no end of turn — #130 §3's loop,
+    which only the ladder ends — is `unavailable` over whatever the ladder
+    reported, flips the verdict, and bills nothing unless the CLI reported
+    usage: nothing was served. Whether that loop still exists at 0.154.0
+    is unverified (the recording machine was signed in); the probe is the
+    gate and the wall is the backstop either way.
+  - **After `SIGINT`**: nothing printed, exit 1, no end of turn
+    (`2-sigint`); the run is `abandoned` at the first rung and billed the
+    ceiling, §5's third row. **After `SIGTERM`**: nothing, exit 143
+    (`3-sigterm`). The *#128* rows for both are pinned as that.
+
+  Every row is tested against the seven committed transcripts, with the
+  rows that wait on a grace period in the `ci` profile
+  (`agent_codex_ladder`). `tau-fake-cli`'s `touch` directive (#127) is
+  what those rows wait on. The `Cli` trait of the 2026-09-20 amendment is
+  still owed: `claude.rs` (#127) was not on `main` when this lane shipped,
+  so the two adapters are two files of the same shape, and the extraction
+  is a follow-on with both in hand.

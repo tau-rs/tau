@@ -21,8 +21,9 @@
 //! | `{"on": {"signal": "SIGINT"}, "delay_ms": 0, "lines": [<json>…], "exit": 0}` | the same, for `SIGINT` or `SIGTERM`. |
 //! | `{"on": {"signal": "SIGTERM"}, "ignore": true}` | swallows the signal, so the driver has to reach `SIGKILL`. |
 //! | `{"withhold": "<substring>"}` | never prints a line containing `<substring>`, wherever the script would have printed it. Withholding `"type":"result"` produces a run with no terminal event: `lost`. |
+//! | `{"touch": "<path>", "delay_ms": 0}` | creates (or truncates) the file at `<path>` after the delay. A readiness marker: the signal handlers are installed before the first timeline step runs, so a test that waits for the file before sending a signal knows the signal will be caught, however slowly the binary started. |
 //!
-//! `line` and `exit` directives form the **timeline**, in file order. A
+//! `line`, `touch` and `exit` directives form the **timeline**, in file order. A
 //! reaction **replaces** whatever the timeline still had to print: the
 //! CLI was interrupted mid-turn, and what follows is the interruption's
 //! own output. `ignore` leaves the timeline alone.
@@ -71,6 +72,7 @@
 mod fake {
     use std::collections::{BTreeMap, VecDeque};
     use std::io::{self, BufRead, Write};
+    use std::path::PathBuf;
     use std::process::ExitCode;
     use std::sync::mpsc;
     use std::time::Duration;
@@ -87,6 +89,8 @@ mod fake {
     enum Action {
         /// Print this line on stdout.
         Emit(String),
+        /// Create this file: a readiness marker for a test.
+        Touch(PathBuf),
         /// Exit with this status.
         Exit(i32),
     }
@@ -232,13 +236,21 @@ mod fake {
                     delay: delay_of(&directive).map_err(|e| with(&e))?,
                     action: Action::Emit(render(line)),
                 });
+            } else if let Some(path) = directive.get("touch") {
+                let Value::String(path) = path else {
+                    return Err(with(&format!("touch must be a string, got {path}")));
+                };
+                script.timeline.push_back(Step {
+                    delay: delay_of(&directive).map_err(|e| with(&e))?,
+                    action: Action::Touch(PathBuf::from(path)),
+                });
             } else if let Some(code) = exit_of(&directive).map_err(|e| with(&e))? {
                 script.timeline.push_back(Step {
                     delay: delay_of(&directive).map_err(|e| with(&e))?,
                     action: Action::Exit(code),
                 });
             } else {
-                return Err(with("a directive is line, exit, on, or withhold"));
+                return Err(with("a directive is line, touch, exit, on, or withhold"));
             }
         }
         Ok(script)
@@ -248,6 +260,10 @@ mod fake {
     fn perform(step: Step, withhold: &[String]) -> Result<Option<i32>, String> {
         match step.action {
             Action::Exit(code) => Ok(Some(code)),
+            Action::Touch(path) => {
+                std::fs::write(&path, b"").map_err(|e| format!("{}: {e}", path.display()))?;
+                Ok(None)
+            }
             Action::Emit(text) => {
                 if withhold.iter().any(|pattern| text.contains(pattern)) {
                     return Ok(None);

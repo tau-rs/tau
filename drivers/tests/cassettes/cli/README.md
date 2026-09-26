@@ -19,7 +19,8 @@ runs #128's gating comment asked for, `5-model-rejected` is a backend 400
 (`-m gpt-5-codex`, which that account does not serve), and `6-stdin-held`
 holds stdin open for five seconds after spawn: nothing is printed until it
 closes, because `codex exec` with a piped stdin reads it to EOF as more
-prompt before starting. Three things the recording pinned that the gate
+prompt before starting; `7-resume-unknown` resumes a thread id the CLI
+has never seen (nothing on stdout, exit 1, the reason on stderr). Three things the recording pinned that the gate
 did not know: the `brew` pin `0.46.0` refuses every model for a ChatGPT
 account (`gpt-5.5` answers "requires a newer version of Codex"), so the
 pin is the `0.154.0` Conductor ships; the strict structured-output
