@@ -132,6 +132,48 @@ pub enum KernelError {
     Closed,
 }
 
+/// The shred rule, over a state and a store (ADR-0012 §3): the subtree
+/// under `root` from `state`, refused with [`ShredError::Live`] naming the
+/// first agent that is live or cancelling, otherwise every agent's key
+/// dropped and the store's fault latch read afterwards.
+///
+/// [`Kernel::shred`] is this over the live state and the kernel's own
+/// store; `tau shred` is this over a folded log and a store opened from
+/// disk. One function, so the two never disagree on what "shreddable"
+/// means. An agent `state` does not know is a no-op, as is a second shred.
+///
+/// # Errors
+///
+/// [`ShredError::Live`]: nothing was shredded. [`ShredError::Faulted`]: the
+/// store reports a write-path failure, this shred's or an earlier one's,
+/// so a dropped key cannot be promised (ADR-0012 §1). The reason names the
+/// store; the caller decides what else to fault.
+pub fn shred_subtree(
+    state: &State,
+    blobs: &mut dyn Blobs,
+    root: AgentId,
+) -> Result<(), ShredError> {
+    let subtree = state.subtree(root);
+    if let Some(live) = subtree.iter().copied().find(|id| {
+        state
+            .agent(*id)
+            .is_some_and(|a| matches!(a.status, Status::Live | Status::Cancelling))
+    }) {
+        return Err(ShredError::Live(live));
+    }
+    for owner in subtree {
+        blobs.shred(owner);
+    }
+    // A shred that could not drop a key must not be reported as erasure:
+    // the latch is asked after the writes.
+    if let Some(reason) = blobs.fault() {
+        return Err(ShredError::Faulted {
+            reason: format!("blob store: {reason}"),
+        });
+    }
+    Ok(())
+}
+
 /// Why [`Kernel::shred`] refused (ADR-0012 §3).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
@@ -1305,28 +1347,16 @@ impl Kernel {
     /// promise that a key is gone, and an erasure reported as done and not
     /// done is the one answer this must never give.
     pub fn shred(&self, root: AgentId) -> Result<(), ShredError> {
-        let mut inner = self.lock();
-        let subtree = inner.state.subtree(root);
-        if let Some(live) = subtree.iter().copied().find(|id| {
-            inner
-                .state
-                .agent(*id)
-                .is_some_and(|a| matches!(a.status, Status::Live | Status::Cancelling))
-        }) {
-            return Err(ShredError::Live(live));
+        let mut guard = self.lock();
+        let inner = &mut *guard;
+        match shred_subtree(&inner.state, inner.blobs.as_mut(), root) {
+            // The kernel is faulted with the same reason: a store that has
+            // faulted at any point can promise nothing about later writes.
+            Err(ShredError::Faulted { reason }) => Err(ShredError::Faulted {
+                reason: inner.raise_fault(reason),
+            }),
+            other => other,
         }
-        for owner in subtree {
-            inner.blobs.shred(owner);
-        }
-        // A shred that could not drop a key must not be reported as erasure
-        // (ADR-0012 §1): the store's latch is asked after the writes, and a
-        // store that has faulted at any point can promise nothing.
-        if let Some(reason) = inner.blobs.fault() {
-            return Err(ShredError::Faulted {
-                reason: inner.raise_fault(format!("blob store: {reason}")),
-            });
-        }
-        Ok(())
     }
 
     /// A copy of every log entry so far.
