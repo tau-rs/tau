@@ -12,9 +12,13 @@
 //!   the final message from the last `agent_message` item, an error kind
 //!   from `turn.failed`.
 //!
-//! [`CodexDriver`] is `impl Driver` over decode → flights → run → settle,
+//! [`Codex`] is the `impl Cli` that hands those two functions to the
+//! shared [`AgentDriver`], and [`CodexDriver`] is that driver over it,
 //! with nothing of its own to decide: every `stop`, every bill, and every
-//! rung of the ladder is the shared module's.
+//! rung of the ladder is the shared module's. Two habits are its own,
+//! and the trait has a method for each: the schema file below is the run's
+//! [`Cli::Scratch`], and the reply's `mode` is read from the login verdict
+//! rather than from an event, because no `--json` event states it.
 //!
 //! ```text
 //! payload ──decode──▶ Accepted ──invocation──▶ codex -a never exec --json … ──▶ lines
@@ -43,19 +47,19 @@
 //! reads (#128 run 1 read one from outside the workspace).
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use serde_json::Value;
-use tau_kernel::abi::{Budget as KernelBudget, Consumption, Corr};
-use tau_kernel::driver::{Driver, ToolSchema};
-use tau_kernel::kernel::{BoxFuture, Delivery};
+use tau_kernel::abi::Corr;
 
-use super::process::{self, Interrupt, Invocation, Run};
-use super::wire::{self, Caps, ErrorKind, Reply, Stop, Truncated, Usage, VERSION};
+use super::driver::sealed::Sealed;
+use super::process::{Interrupt, Invocation, Run};
+use super::wire::{Caps, ErrorKind, RunError, Stop, Usage};
 use super::{
-    decode, encode, envelope, probe_login, probe_version, refusal, refused, settle, Accepted,
-    AgentConfig, Availability, ConfigError, Flights, LoginOutput, Outcome, Probe, Verdict,
+    envelope, refusal, Accepted, AgentConfig, AgentDriver, Cli, LoginOutput, Outcome, Probe,
+    Verdict,
 };
+
+pub use super::CONTRACT;
 
 /// What `codex` can honour of the wire at 0.157.1: no per-session tool
 /// allowlist (the cage is `-s` in the configuration), no cost or turn
@@ -66,19 +70,6 @@ pub const CAPS: Caps = Caps {
     budget: false,
     resume: true,
 };
-
-/// The worker contract (ADR-0013 §4), versioned with [`VERSION`] and
-/// prepended to the task: `exec` has no system-prompt flag.
-///
-/// The same text the `claude` adapter appends to the system prompt; the
-/// `Cli` trait extraction hoists it.
-pub const CONTRACT: &str = "# tau worker contract v1
-You are a headless worker spawned by the tau kernel. Rules:
-- Never ask questions. If something is ambiguous, make the conservative assumption and record it.
-- Stay inside the working directory you were started in.
-- If the task is too large to finish, stop, and report what is done and what is left with status \"partial\".
-- When you finish, your final message must be exactly one JSON object and nothing else (no prose, no code fences):
-{\"status\":\"ok | partial | failed | cancelled\",\"summary\":\"<= 3 sentences\",\"artifacts\":[{\"path\":\"relative/to/workspace\",\"kind\":\"file | patch | report\"}],\"assumptions\":[\"...\"],\"events\":[\"notable decisions\"],\"error\":null}";
 
 /// The probe (ADR-0013 §6, §7): `codex --version` prints `codex-cli
 /// 0.157.1`; `codex login status` exits 0 when signed in and prints its one
@@ -361,8 +352,8 @@ fn names_rate_limit(lowered: &str) -> bool {
 // --- the schema file ----------------------------------------------------------
 
 /// The strict envelope schema on disk for one run, removed when the run
-/// ends however it ends.
-struct SchemaFile {
+/// ends however it ends: the run's [`Cli::Scratch`].
+pub struct SchemaFile {
     path: PathBuf,
 }
 
@@ -391,241 +382,63 @@ impl Drop for SchemaFile {
     }
 }
 
-// --- the driver ---------------------------------------------------------------
+// --- the adapter --------------------------------------------------------------
 
-/// The `codex` agent driver: one registration, one tool, one CLI binary
-/// under one login the driver never sees. Cheap to clone; every clone shares
-/// one flight registry, and dropping the last clone abandons every open run.
-#[derive(Clone)]
-pub struct CodexDriver {
-    inner: Arc<Inner>,
-}
+/// The `codex` CLI, as [`AgentDriver`] drives it: the [`Cli`] over this
+/// file's two functions. A unit — everything it knows is in the argv and
+/// the event mapping, and the one thing it keeps on disk lives exactly one
+/// run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Codex;
 
-struct Inner {
-    shared: Arc<Shared>,
-    flights: Arc<Flights>,
-    ceiling: KernelBudget,
-    schema: ToolSchema,
-}
+impl Sealed for Codex {}
 
-/// What a run thread needs, and nothing that would keep [`Inner`] alive: a
-/// run holds this, not `Inner`, so that dropping the last driver handle
-/// runs `Inner`'s `Drop` while runs are still open.
-struct Shared {
-    config: AgentConfig,
-    version: String,
-    probe: Probe,
-    availability: Availability,
-}
+impl Cli for Codex {
+    const CAPS: Caps = self::CAPS;
 
-impl Drop for Inner {
-    fn drop(&mut self) {
-        // A harness shutting down leaves no CLI behind (ADR-0013 §5).
-        self.flights.abandon_all();
+    type Scratch = SchemaFile;
+
+    fn probe() -> Probe {
+        self::probe()
     }
-}
 
-impl CodexDriver {
-    /// Builds the driver: checks the config, runs the version probe, and
-    /// runs the login probe once (ADR-0013 §6).
-    ///
-    /// # Errors
-    ///
-    /// [`ConfigError`] for a config the host cannot honour, a binary that
-    /// cannot be run, or a version that does not match the pin. **Not** for
-    /// a CLI that is logged out: that is a runtime state a human changes,
-    /// and every `send` until then answers `error.unavailable`.
-    pub fn new(config: AgentConfig) -> Result<Self, ConfigError> {
-        config.check()?;
-        let probe = probe();
-        let version = probe_version(&config, &probe)?;
-        let availability = Availability::new(probe_login(&config, &probe));
-        let ceiling = config.ceiling();
-        let schema = ToolSchema {
-            description: config.describe(CAPS),
-            input_schema: serde_json::to_vec(&wire::schema(CAPS)).unwrap_or_default(),
-        };
-        Ok(Self {
-            inner: Arc::new(Inner {
-                shared: Arc::new(Shared {
-                    config,
-                    version,
-                    probe,
-                    availability,
-                }),
-                flights: Arc::new(Flights::default()),
-                ceiling,
-                schema,
-            }),
+    /// The schema file, or `error.host` with what the host said; nothing
+    /// is spawned and nothing is billed.
+    fn scratch(&self, corr: Corr) -> Result<SchemaFile, RunError> {
+        SchemaFile::write(corr).map_err(|e| {
+            refusal(
+                ErrorKind::Host,
+                format!("cannot write the envelope schema: {e}"),
+            )
         })
     }
 
-    /// The ceiling to register this driver with. See
-    /// [`AgentConfig::ceiling`].
-    #[must_use]
-    pub fn ceiling(&self) -> KernelBudget {
-        self.inner.ceiling.clone()
+    fn invocation(
+        &self,
+        config: &AgentConfig,
+        accepted: &Accepted,
+        schema: &SchemaFile,
+    ) -> Invocation {
+        self::invocation(config, accepted, schema.path())
     }
 
-    /// The config this driver was built from.
-    #[must_use]
-    pub fn config(&self) -> &AgentConfig {
-        &self.inner.shared.config
+    /// `mode` is the login probe's line (§2): no `--json` event names it,
+    /// and the verdict this run proceeded under is the one that does.
+    fn outcome(&self, run: &Run, verdict: &Verdict) -> Outcome {
+        let mut out = self::outcome(run);
+        out.mode = verdict.mode().map(str::to_owned);
+        out
     }
 
-    /// What the binary printed at construction: the reply's `cli.version`.
-    #[must_use]
-    pub fn version(&self) -> &str {
-        &self.inner.shared.version
-    }
-
-    /// The login verdict as it stands, without probing.
-    #[must_use]
-    pub fn verdict(&self) -> Verdict {
-        self.inner.shared.availability.verdict()
-    }
-
-    /// How many runs are open right now.
-    #[must_use]
-    pub fn in_flight(&self) -> usize {
-        self.inner.flights.in_flight()
+    /// Read from the run's `error` events, not from its `stop`: an unsigned
+    /// `codex exec` retries on `401` and may never reach a `turn.failed`
+    /// that names it (#130 §3).
+    fn auth_failure(&self, run: &Run, _outcome: &Outcome) -> Option<String> {
+        self::auth_failure(run)
     }
 }
 
-impl std::fmt::Debug for CodexDriver {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CodexDriver")
-            .field("config", &self.inner.shared.config)
-            .field("version", &self.inner.shared.version)
-            .field("in_flight", &self.in_flight())
-            .finish_non_exhaustive()
-    }
-}
-
-impl Driver for CodexDriver {
-    fn handle(&self, request: Delivery) -> BoxFuture<(Vec<u8>, Consumption)> {
-        // Registered now, not when the future is first polled: `abandon`
-        // may arrive in between, and it must find the entry.
-        let (flight, abandoned_early) = self.inner.flights.enter(request.corr);
-        let shared = Arc::clone(&self.inner.shared);
-        if abandoned_early {
-            drop(flight);
-            let reply = abandoned(&shared.config, &shared.version);
-            return Box::pin(async move { (encode(&reply), Consumption::none()) });
-        }
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let on_thread = Arc::clone(&shared);
-        let spawned = std::thread::Builder::new()
-            .name("tau-agent-codex".to_owned())
-            .spawn(move || {
-                let flight = flight;
-                let (reply, consumed) =
-                    on_thread.run(request.corr, &request.payload, flight.cancel());
-                drop(flight);
-                let _ = tx.send((encode(&reply), consumed));
-            });
-        match spawned {
-            Ok(_) => Box::pin(async move {
-                rx.await.unwrap_or_else(|_| {
-                    let reply = refused(
-                        &shared.config,
-                        &shared.version,
-                        refusal(ErrorKind::Host, "the run thread ended without a reply"),
-                    );
-                    (encode(&reply), Consumption::none())
-                })
-            }),
-            Err(e) => {
-                let reply = refused(
-                    &shared.config,
-                    &shared.version,
-                    refusal(ErrorKind::Host, format!("cannot start a run thread: {e}")),
-                );
-                Box::pin(async move { (encode(&reply), Consumption::none()) })
-            }
-        }
-    }
-
-    fn describe(&self) -> Option<ToolSchema> {
-        Some(self.inner.schema.clone())
-    }
-
-    fn abandon(&self, corr: Corr) {
-        self.inner.flights.abandon(corr);
-    }
-}
-
-impl Shared {
-    /// One `send`, on its own thread: decode, the availability check, the
-    /// schema file, the run, the read-back, the settlement.
-    fn run(&self, corr: Corr, payload: &[u8], cancel: &process::Cancel) -> (Reply, Consumption) {
-        let config = &self.config;
-        let accepted = match decode(payload, config, CAPS) {
-            Ok(accepted) => accepted,
-            Err(error) => return (refused(config, &self.version, error), Consumption::none()),
-        };
-        // Refused while logged out, and re-probed once per refused `send`
-        // (ADR-0013 §6): never a retry loop, never a login attempt. For
-        // `codex` this is the gate that works: an unsigned run retries on
-        // 401 and never reports "not authenticated" on its own (#130 §3).
-        let mode = match self.availability.check(config, &self.probe) {
-            Verdict::Unavailable { message } => {
-                return (
-                    refused(
-                        config,
-                        &self.version,
-                        refusal(ErrorKind::Unavailable, message),
-                    ),
-                    Consumption::none(),
-                )
-            }
-            Verdict::Ready { mode } => mode,
-        };
-        let host = |what: String| {
-            (
-                refused(config, &self.version, refusal(ErrorKind::Host, what)),
-                Consumption::none(),
-            )
-        };
-        let schema = match SchemaFile::write(corr) {
-            Ok(schema) => schema,
-            Err(e) => return host(format!("cannot write the envelope schema: {e}")),
-        };
-        let invocation = invocation(config, &accepted, schema.path());
-        let run = match process::run(&invocation, config.bounds(), cancel) {
-            Ok(run) => run,
-            Err(e) => {
-                return host(format!("cannot start `{}`: {e}", config.binary.display()));
-            }
-        };
-        drop(schema);
-        let mut outcome = outcome(&run);
-        outcome.mode = mode;
-        if let Some(message) = auth_failure(&run) {
-            // The run's own events say the CLI is logged out, whatever the
-            // probe said earlier.
-            self.availability.fail(message);
-        }
-        settle(config, &self.version, &run, &outcome)
-    }
-}
-
-/// The reply for an abandon that arrived before anything was spawned: the
-/// first row of the ladder table — `abandoned`, zeros, nothing billed.
-fn abandoned(config: &AgentConfig, version: &str) -> Reply {
-    Reply {
-        v: VERSION,
-        stop: Stop::Abandoned,
-        envelope: None,
-        session: None,
-        cli: wire::Cli {
-            name: config.name.clone(),
-            version: version.to_owned(),
-        },
-        model: None,
-        mode: None,
-        usage: Usage::default(),
-        transcript: Vec::new(),
-        truncated: Truncated::default(),
-    }
-}
+/// The `codex` agent driver: [`AgentDriver`] over [`Codex`]. One
+/// registration, one tool, one CLI binary under one login the driver never
+/// sees.
+pub type CodexDriver = AgentDriver<Codex>;

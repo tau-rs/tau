@@ -1030,3 +1030,52 @@ neighbour for.
   §1's `Cli` trait extraction (amendment 2026-09-20) waits on both
   adapters being on `main`; until then `CONTRACT` is spelled once in each,
   the same text.
+- **2026-09-26** — §1's `Cli` trait is **extracted**, by
+  [#201](https://github.com/tau-rs/tau/issues/201), closing the 2026-09-20
+  deferral. `tau_drivers::agent::AgentDriver<C: Cli>` is the one `impl
+  Driver` — decode, the flight registry, the run thread and its one-shot
+  channel, the read-back, the settlement — and `claude::ClaudeDriver` and
+  `codex::CodexDriver` are type aliases over `claude::Claude` and
+  `codex::Codex`, each a unit `impl Cli`. Every test under
+  `drivers/tests/agent_*` passes unchanged, which is the proof the move
+  changed no behaviour. The three objections, answered:
+  - *A crate-private trait cannot bound a public generic.* The trait is
+    `pub` and **sealed** (`Cli: sealed::Sealed`, the seal reachable only
+    from inside the module), so it bounds the public driver and still has
+    exactly the implementors this crate ships — and its method set can grow
+    without a breaking change, which is how the two rows below get in.
+  - *No implementors is dead code under `-D warnings`.* Two exist.
+  - *Nothing under `tests/` can implement one.* Nothing needs to: the ladder
+    tests drive the real `AgentDriver<Claude>` and `AgentDriver<Codex>` over
+    `tau-fake-cli`.
+
+  The shape, confirmed by the lane and differing from #201's sketch in two
+  places, each forced by a test that stays as it is:
+  - `CAPS`, `probe()`, `invocation(&self, &AgentConfig, &Accepted,
+    &Self::Scratch) -> Invocation`, `outcome(&self, &Run, &Verdict) ->
+    Outcome`, and two defaulted hooks. **No `prepare(&AgentConfig)`**: the
+    adapter is `Default`, because `codex`'s schema file is a *per-run*
+    scratch — `agent_codex` asserts it is gone after the run while the
+    driver is alive — so it is the associated `Scratch` type, written by
+    `scratch(&self, Corr) -> Result<Self::Scratch, RunError>` and dropped
+    the moment the process ends. `claude`'s is `()`.
+  - **`auth_failure(&self, &Run, &Outcome) -> Option<String>`**, defaulted
+    to the outcome's `unavailable` stop (`claude`, #194 run 11), overridden
+    by `codex` to scan its `error` events (#130 §3). What #201 called
+    `codex`'s post-settle `unavailable` override is, on `main` since #195,
+    a verdict flip and never a `stop` rewrite; the hook is that flip, and
+    the driver does it once for both.
+  - **`refused_before_start(&self, &Run) -> Option<RunError>`**, defaulted
+    to `None`: the reply a run that exited without a terminal event should
+    get instead of `error.lost` at the ceiling, when the CLI's exit makes
+    the reason plain. Nothing overrides it yet; it is where #223's
+    unknown-thread `resume` row lands.
+
+  Two smaller moves. `CONTRACT` is spelled once, in `agent`, and re-exported
+  by each adapter. §1's file layout gains `driver.rs`, holding the trait and
+  the driver, gated on either adapter's feature because the run thread's
+  one-shot channel needs `tokio` and the shared half does not; `agent`
+  re-exports both, so §1's `mod.rs` line reads as written. §1's "crate-
+  private seam, not a public trait" now reads "public and sealed", which
+  keeps what that sentence was for: nothing in `libtau` or the kernel learns
+  either adapter, and no third implementor exists.
