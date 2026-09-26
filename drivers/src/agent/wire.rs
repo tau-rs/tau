@@ -383,19 +383,26 @@ pub fn schema(caps: Caps) -> Value {
                 remove_property(branch, "budget");
             }
         }
-        // The branch carries the shape; the root carries the object-ness,
-        // as in the ADR's projection.
+        // The branch carries the shape and closes itself; the root carries
+        // the object-ness. `additionalProperties: false` must sit beside
+        // the `properties` it closes: on the root, next to a `oneOf`, it
+        // sees no `properties` of its own and refuses every key (draft
+        // 2020-12 does not look into applicators) — which is what #193's
+        // loop test found, and what `additionalProperties`'s own semantics
+        // say.
         if let Some(object) = branch.as_object_mut() {
             object.remove("type");
             object.remove("title");
             object.remove("description");
-            object.remove("additionalProperties");
+            object.insert("additionalProperties".to_owned(), Value::Bool(false));
         }
     }
     let mut root = serde_json::Map::new();
     root.insert("type".to_owned(), Value::String("object".to_owned()));
     match <[Value; 1]>::try_from(branches) {
-        // One op left: a flat object reads better than a one-armed `oneOf`.
+        // One op left: a flat object reads better than a one-armed `oneOf`,
+        // and its `additionalProperties` lands on the root with its
+        // `properties`.
         Ok([only]) => {
             if let Some(object) = only.as_object() {
                 for (key, value) in object {
@@ -407,7 +414,6 @@ pub fn schema(caps: Caps) -> Value {
             root.insert("oneOf".to_owned(), Value::Array(branches));
         }
     }
-    root.insert("additionalProperties".to_owned(), Value::Bool(false));
     let mut schema = Value::Object(root);
     super::tidy(&mut schema, false);
     schema

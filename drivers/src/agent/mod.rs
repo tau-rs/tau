@@ -115,9 +115,11 @@ pub struct AgentConfig {
     /// `codex`'s `-s`. Opaque here, and never the request's to choose.
     pub permission: Option<String>,
     /// The child's **whole** environment. Nothing is inherited. `HOME`
-    /// belongs here, because the CLI's login lives under it; a harness that
-    /// wants the API-key billing cell adds the key, one that wants the
-    /// subscription cell does not, and the driver cannot tell which it got.
+    /// belongs here, because the CLI's login lives under it — and on macOS
+    /// `USER` too, which `claude`'s login lookup keys on (#194: without it
+    /// a logged-in laptop reads as logged out); a harness that wants the
+    /// API-key billing cell adds the key, one that wants the subscription
+    /// cell does not, and the driver cannot tell which it got.
     pub env: Vec<(String, String)>,
     /// The largest `task` accepted. Over it is `error.unsupported`, and
     /// nothing is spawned.

@@ -1,7 +1,8 @@
 //! The `claude` adapter (ADR-0013 §7, the `claude` column) against
-//! `tau-fake-cli` replaying the #130 transcripts: the fixed argv, the event
-//! mapping over all seven runs, and one test per row of the `stop` table
-//! and the `error.kind` table that does not wait on a grace period.
+//! `tau-fake-cli` replaying the #130 and #194 transcripts: the fixed argv,
+//! the event mapping over all eleven runs, and one test per row of the
+//! `stop` table and the `error.kind` table that does not wait on a grace
+//! period.
 //!
 //! The rows that do — SIGTERM, SIGKILL, the wall bound — are
 //! `agent_claude_ladder.rs`, the `ci` profile's. The driver through a real
@@ -29,8 +30,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use tau_drivers::agent::claude::{self, ClaudeDriver, CAPS, CONTRACT, INTERRUPT};
-use tau_drivers::agent::envelope::Status;
+use tau_drivers::agent::claude::{self, ClaudeDriver, CAPS, CONTRACT, INTERRUPT, NOT_LOGGED_IN};
+use tau_drivers::agent::envelope::{self, Status};
 use tau_drivers::agent::process::{Ending, Interrupt, Run};
 use tau_drivers::agent::wire::{ErrorKind, Limit, Reply, Stop, Usage};
 use tau_drivers::agent::{accept, wire, Accepted, ConfigError, Verdict};
@@ -117,7 +118,7 @@ fn the_fixed_argv_is_the_adrs_then_the_config_then_the_request() {
     );
     let args = invocation.args.clone();
     assert_eq!(
-        &args[..9],
+        &args[..10],
         [
             "-p",
             "--safe-mode",
@@ -128,8 +129,14 @@ fn the_fixed_argv_is_the_adrs_then_the_config_then_the_request() {
             "--verbose",
             "--permission-prompts",
             "none",
+            "--json-schema",
         ],
         "the fixed argv, ADR-0013 §7"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&args[10]).unwrap(),
+        envelope::schema(),
+        "the strict envelope schema, one argument (#194 run 8)"
     );
     let after = |flag: &str| {
         let at = args
@@ -152,10 +159,6 @@ fn the_fixed_argv_is_the_adrs_then_the_config_then_the_request() {
     assert_eq!(after("--max-budget-usd"), "2", "$2, from the registration");
     assert_eq!(after("--max-turns"), "40");
     assert!(!args.iter().any(|a| a == "--resume"));
-    assert!(
-        !args.iter().any(|a| a == "--json-schema"),
-        "off: see the amendment"
-    );
     assert!(!args.iter().any(|a| a == "--model" || a == "--effort"));
 
     // The task is the first stdin message, and the interrupt is in-band.
@@ -329,6 +332,36 @@ fn every_transcript_maps_as_the_adr_table_says() {
             Some(2),
             true,
         ),
+        // #194: `--json-schema` — the envelope is still `result.result`.
+        (
+            "8-json-schema",
+            None,
+            4 + 16_893 + 16_650,
+            Some(187_758),
+            Some(3),
+            true,
+        ),
+        // #194: `--max-budget-usd 0.001` — the cap is the reported cost.
+        (
+            "9-budget-exhausted",
+            Some(Stop::Limit(Limit::Cost)),
+            0,
+            Some(1_000),
+            Some(1),
+            false,
+        ),
+        // #194: logged out — `subtype: success` with `is_error: true`.
+        (
+            "11-logged-out-run",
+            Some(Stop::Error(tau_drivers::agent::refusal(
+                ErrorKind::Unavailable,
+                NOT_LOGGED_IN,
+            ))),
+            0,
+            Some(0),
+            Some(1),
+            true,
+        ),
     ];
     for (run, stop, input, cost, turns, final_message) in table {
         let outcome = claude::outcome(&run_from(run));
@@ -473,24 +506,21 @@ async fn max_turns_exhaustion_is_limit_turns_with_no_envelope_and_real_usage() {
 
 #[tokio::test]
 async fn a_budget_exhaustion_is_limit_cost() {
-    let dir = agent::Temp::new("cost");
-    let script = agent::synthetic_script(
-        dir.path(),
-        "budget",
-        json!({
-            "type": "result", "subtype": "error_max_budget_usd", "is_error": true,
-            "terminal_reason": "max_budget_usd", "num_turns": 4, "total_cost_usd": 0.5,
-            "usage": { "input_tokens": 10, "output_tokens": 5 },
-            "errors": ["Reached maximum budget ($0.50)"]
-        }),
-        1,
-    );
+    // #194 run 9: `--max-budget-usd 0.001` on a two-turn task.
+    let dir = agent::Temp::new("budget");
+    let script = agent::replay_script(dir.path(), PIN, "9-budget-exhausted");
     let (_stub, driver) = driver(dir.path(), &script);
-    let (reply, consumed) = send(&driver, 1, agent::run_payload("x")).await;
+    let (reply, consumed) = send(&driver, 1, agent::run_payload("a.txt, then b.txt")).await;
     assert_eq!(reply.stop, Stop::Limit(Limit::Cost));
-    assert!(reply.envelope.is_none());
-    assert_eq!(consumed.get(&DimKey::CostMicroUsd), Some(500_000));
-    assert_eq!(consumed.get(&DimKey::Tokens), Some(15));
+    assert!(reply.envelope.is_none(), "`result: null`");
+    assert_eq!(reply.usage.turns, Some(1));
+    assert_eq!(
+        consumed.get(&DimKey::CostMicroUsd),
+        Some(1_000),
+        "the CLI reports the cap as the cost"
+    );
+    assert_eq!(consumed.get(&DimKey::Tokens), Some(0), "usage all zero");
+    assert!(driver.verdict().is_ready(), "a bound is not a logout");
 }
 
 #[tokio::test]
@@ -635,13 +665,13 @@ async fn logged_out_is_a_clean_refusal_that_reprobes_once_per_send() {
         message.starts_with("claude auth status: exit 1: "),
         "{message}"
     );
-    assert!(message.contains("Not logged in"), "{message}");
+    assert!(message.contains("\"loggedIn\":false"), "{message}");
 
     // Refused, nothing spawned, nothing billed — and re-probed exactly once.
     let (reply, consumed) = send(&driver, 1, agent::run_payload("x")).await;
     let (kind, message) = error_of(&reply);
     assert_eq!(kind, ErrorKind::Unavailable);
-    assert!(message.contains("Not logged in"), "{message}");
+    assert!(message.contains("\"loggedIn\":false"), "{message}");
     assert!(reply.transcript.is_empty() && reply.envelope.is_none());
     assert_eq!(reply.mode, None, "the probe's document never crosses");
     assert_eq!(consumed, Consumption::none());
@@ -697,7 +727,89 @@ async fn a_result_that_names_an_auth_failure_is_unavailable_and_flips_the_verdic
 }
 
 #[tokio::test]
-async fn a_rate_limit_is_throttled_by_status_or_by_name() {
+async fn a_logged_out_run_is_unavailable_with_the_pinned_text_and_flips_the_verdict() {
+    // #194 run 11: `subtype: success`, `is_error: true`, `terminal_reason:
+    // api_error`, `api_error_status: null`, no `errors[]`, the text in
+    // `result`, zero usage, exit 1.
+    let dir = agent::Temp::new("logged-out-run");
+    let script = agent::replay_script(dir.path(), PIN, "11-logged-out-run");
+    let (stub, driver) = driver(dir.path(), &script);
+    let (reply, consumed) = send(&driver, 1, agent::run_payload("x")).await;
+    let (kind, message) = error_of(&reply);
+    assert_eq!(kind, ErrorKind::Unavailable);
+    assert_eq!(message, NOT_LOGGED_IN);
+    assert_eq!(
+        reply.usage,
+        Usage {
+            turns: Some(1),
+            cost_microusd: Some(0),
+            ..Usage::default()
+        }
+    );
+    assert_eq!(consumed.get(&DimKey::Tokens), Some(0), "nothing was spent");
+    assert_eq!(consumed.get(&DimKey::CostMicroUsd), Some(0));
+    assert!(
+        !driver.verdict().is_ready(),
+        "the run's own events flipped it"
+    );
+    let (_, _) = send(&driver, 2, agent::run_payload("x")).await;
+    assert_eq!(stub.probes(), 2, "re-probed once");
+}
+
+#[test]
+fn the_logged_out_probe_is_exit_1_with_the_status_document_on_stdout() {
+    // #194 run 10, and the stub answers the same shape.
+    let records = agent::transcript(PIN, "10-logged-out-probe");
+    let exit = records.last().unwrap();
+    assert_eq!(exit["code"], 1);
+    assert_eq!(exit["stderr"], "");
+    let stdout = agent::transcript_stdout(&records);
+    assert_eq!(stdout.len(), 1);
+    assert_eq!(stdout[0]["loggedIn"], false);
+    assert_eq!(stdout[0]["authMethod"], "none");
+    let dir = agent::Temp::new("probe-shape");
+    let stub = ClaudeStub::new(dir.path());
+    stub.set_logged_in(false);
+    let out = std::process::Command::new(&stub.binary)
+        .args(["auth", "status"])
+        .env(agent::LOGIN_VAR, &stub.login)
+        .env(agent::PROBES_VAR, &stub.probes)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stderr.is_empty());
+    let said: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(said["loggedIn"], false);
+    assert_eq!(said["authMethod"], "none");
+}
+
+#[tokio::test]
+async fn a_json_schema_run_is_done_with_the_envelope_read_from_the_result_text() {
+    // #194 run 8: the session calls `StructuredOutput`, and the `result`
+    // carries the envelope as `structured_output` and, serialised, as
+    // `result` — which is what the driver reads.
+    let dir = agent::Temp::new("json-schema");
+    let script = agent::replay_script(dir.path(), PIN, "8-json-schema");
+    let (_stub, driver) = driver(dir.path(), &script);
+    let (reply, consumed) = send(&driver, 1, agent::run_payload("write hello.txt")).await;
+    assert_eq!(reply.stop, Stop::Done, "{:?}", reply.stop);
+    let envelope = reply.envelope.unwrap();
+    assert_eq!(envelope.status, Status::Ok);
+    assert_eq!(envelope.artifacts.len(), 1);
+    assert_eq!(envelope.artifacts[0].path, "hello.txt");
+    let result = reply
+        .transcript
+        .iter()
+        .find(|event| event["type"] == "result")
+        .unwrap();
+    let structured: envelope::Envelope =
+        serde_json::from_value(result["structured_output"].clone()).unwrap();
+    assert_eq!(structured, envelope, "the same object twice");
+    assert_eq!(consumed.get(&DimKey::CostMicroUsd), Some(187_758));
+}
+
+#[tokio::test]
+async fn a_rate_limit_is_throttled_by_status_and_words_alone_are_provider() {
     let dir = agent::Temp::new("throttled");
     for (name, result) in [
         (
@@ -723,7 +835,14 @@ async fn a_rate_limit_is_throttled_by_status_or_by_name() {
         let (_stub, driver) = driver(dir.path(), &script);
         let (reply, consumed) = send(&driver, 1, agent::run_payload("x")).await;
         let (kind, _) = error_of(&reply);
-        assert_eq!(kind, ErrorKind::Throttled, "{name}");
+        // No transcript has reached a rate limit (#130, #194): the field is
+        // read, words are not, so a text that merely names one is `provider`.
+        let expected = if name == "status" {
+            ErrorKind::Throttled
+        } else {
+            ErrorKind::Provider
+        };
+        assert_eq!(kind, expected, "{name}");
         assert_eq!(
             consumed.get(&DimKey::Tokens),
             Some(10),

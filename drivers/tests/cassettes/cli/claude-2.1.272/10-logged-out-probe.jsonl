@@ -1,0 +1,3 @@
+{"tau":"header","v":1,"cli":"claude","version":"2.1.272","recorded_at":"2026-09-26","run":"10-logged-out-probe","source":"#194 (c): claude auth status under a HOME with no login (USER set, PATH, nothing else)","argv":["claude","auth","status"],"scrubbed":[]}
+{"tau":"stdout","at_ms":121,"cut":"printed pretty over 8 lines, kept as one object","line":{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty","analyticsDisabled":false,"projectsDirectory":"/tmp/tau194-home.9A7OMF/.claude/projects","configDirectory":"/tmp/tau194-home.9A7OMF/.claude"}}
+{"tau":"exit","code":1,"elapsed_ms":121,"stderr":"","files":{}}
