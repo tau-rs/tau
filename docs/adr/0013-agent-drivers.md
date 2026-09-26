@@ -608,9 +608,10 @@ document.
 
 An agent driver *is* a tool: a model in the `libtau` loop may hand a
 sub-task to it. The projected schema is derived from `Request` with
-`schemars`, the type the driver deserializes with; `v` is skipped;
-`additionalProperties: false`; and the codex adapter omits `tools`,
-`budget` and the `resume` op because it would refuse them.
+`schemars`, the type the driver deserializes with; `v` is skipped; each
+branch closes itself with `additionalProperties: false`; and the codex
+adapter omits `tools`, `budget` and the `resume` op because it would
+refuse them.
 
 ```json
 {
@@ -618,10 +619,9 @@ sub-task to it. The projected schema is derived from `Request` with
   "input_schema": {
     "type": "object",
     "oneOf": [
-      { "properties": { "op": { "const": "run" }, "task": { "type": "string" }, "workspace": { "type": "string" }, "tools": { "type": "array", "items": { "type": "string" } }, "budget": { "type": "object", "properties": { "cost_microusd": { "type": "integer" }, "turns": { "type": "integer" } } } }, "required": ["op", "task"] },
-      { "properties": { "op": { "const": "resume" }, "session": { "type": "string" }, "task": { "type": "string" }, "workspace": { "type": "string" } }, "required": ["op", "session", "task"] }
-    ],
-    "additionalProperties": false
+      { "properties": { "op": { "const": "run" }, "task": { "type": "string" }, "workspace": { "type": "string" }, "tools": { "type": "array", "items": { "type": "string" } }, "budget": { "type": "object", "properties": { "cost_microusd": { "type": "integer" }, "turns": { "type": "integer" } } } }, "required": ["op", "task"], "additionalProperties": false },
+      { "properties": { "op": { "const": "resume" }, "session": { "type": "string" }, "task": { "type": "string" }, "workspace": { "type": "string" } }, "required": ["op", "session", "task"], "additionalProperties": false }
+    ]
   }
 }
 ```
@@ -915,6 +915,19 @@ neighbour for.
   `touch`, a readiness marker written after its signal handlers are
   installed, so that those rows do not race the binary's start-up under
   load — the shape of [#182](https://github.com/tau-rs/tau/issues/182).
+- **2026-09-26** — §9's projection closed the *root* with
+  `additionalProperties: false`, beside the `oneOf`. Under draft 2020-12
+  that keyword sees only the `properties` of its own schema object — it
+  does not look into `oneOf` — and the root has none, so the schema refused
+  every key, `op` and `task` included. No test caught it before
+  [#193](https://github.com/tau-rs/tau/issues/193): the fixtures compared
+  the projection to itself, and the driver decodes with serde, never with
+  the schema. The first time the projection was *validated against*
+  ([#200](https://github.com/tau-rs/tau/issues/200)) was the `libtau` loop,
+  which checks a `tool_call` against the tool's schema before it sends. Each
+  branch now closes itself, as `schemars` derives it; the root carries only
+  `type: object` and the `oneOf`. The single-op flat projection is unchanged:
+  its `additionalProperties` was always beside its `properties`.
 - **2026-09-26, later** — [#194](https://github.com/tau-rs/tau/issues/194)
   ran the four rows the amendment above left tolerant, on `claude` 2.1.272
   on a logged-in laptop, and recorded them as runs 8–11 beside #130's
