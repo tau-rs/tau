@@ -44,3 +44,9 @@ and not test(tau_snapshot_then_tau_replay_from_matches_every_sidecar)
 retries        = 0          # a flake is a bug; the flake hunter quarantines, CI does not retry
 failure-output = "immediate-final"
 slow-timeout   = { period = "60s", terminate-after = 5 }
+
+# One line per test, with the failure output for the ones that failed. Tier 1
+# ignores it; the Tier 3 flake hunter (scripts/flake-hunt.sh) reads it to
+# compare five runs of this profile test by test.
+[profile.ci.junit]
+path = "junit.xml"

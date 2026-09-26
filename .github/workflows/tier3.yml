@@ -4,7 +4,8 @@
 # committer's fault, and a red build that blames the wrong person trains
 # everyone to ignore red. This file holds item 1 of the seven, the
 # determinism drift sentinel (#72), item 5, the benchmark regression
-# judge (#151), and the keyless live e2e (#168). The rest is tracked in #7.
+# judge (#151), the keyless live e2e (#168), and item 6, the flake hunter
+# (#204). The rest is tracked in #7.
 #
 # The sentinel refolds every log in corpus/ with today's main, through
 # `tau replay --expect` (#91), and expects the state hash each was pinned at. A hash that moved means the reducer
@@ -42,6 +43,21 @@
 # issue naming the row; the job goes red only when it could not have run
 # the rows: the install, the pull, the build, or a pass that ran fewer rows
 # than ROWS_FLOOR (an empty lane must not read green).
+#
+# The flake hunter runs the whole suite five times under the `ci` nextest
+# profile, the one Tier 1 runs, each time at a `--test-threads` width drawn
+# at random, and compares the runs test by test from the profile's JUnit
+# report. `retries = 0` in that profile says a flake is a bug; Tier 1 cannot
+# find one on purpose, since it runs each test once at one width, and Tier
+# 2's serial leg finds only the order-coupled ones at width 1. A test that
+# passes in some runs and fails in others files an issue with the widths it
+# failed at and the failure output; a test that fails in every run files
+# one too, since a nightly on main that finds a red test has found what
+# Tier 1 missed. Nothing edits .config/nextest.toml from here: the issue
+# carries the override to paste, and a quarantine nobody read is the green
+# this tier exists to prevent. The job goes red only when it could not have
+# hunted: a build error, a run without a report, fewer tests than
+# TESTS_FLOOR, or two runs that ran different sets.
 
 name: tier3
 
@@ -77,6 +93,8 @@ env:
   KPI_FLOOR: 3
   LIMIT_PCT: 5
   ROWS_FLOOR: 3
+  RUNS: 5
+  TESTS_FLOOR: 400
 
 jobs:
   sentinel:
@@ -486,3 +504,107 @@ jobs:
           )"
           url="$(gh issue create --title "$title" --label status:ready --body "$body")"
           echo "$title: opened $url"
+
+  # Item 6: the flake hunter (#204). Five runs of the Tier 1 suite at random
+  # widths; scripts/flake-hunt.sh draws the widths, runs nextest, and diffs
+  # the JUnit reports. Wall is five suites plus one build: the serial leg
+  # in tier2 measured 29 s of tests at width 1, so this is minutes.
+  flake:
+    name: flake hunter (5 runs, random widths)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write       # to file an issue per flaky or failing test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: cargo-nextest
+
+      - name: Hunt
+        id: hunt
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          ./scripts/flake-hunt.sh | tee hunt.txt
+          {
+            echo "## flake hunter"
+            echo
+            echo "- $(rustc --version); $(cargo nextest --version | head -1)"
+            echo "- ref: \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`"
+            echo "- $(tail -1 hunt.txt)"
+            echo "- wall (build + $RUNS runs): ${SECONDS}s"
+            echo
+            echo '```'
+            grep -E '^(run [0-9]+ |widths:|FLAKY |FAILING )' hunt.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The five nextest logs and reports, for whoever reads an issue.
+      - name: Upload the run logs
+        if: always() && steps.hunt.outcome != 'skipped'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flake-hunt
+          path: |
+            hunt.txt
+            flakes.tsv
+            flake-hunt/
+          if-no-files-found: warn
+          retention-days: 14
+
+      # One issue per flaky or failing test, deduplicated by exact open title
+      # so a test that flakes for a week is one issue, not seven.
+      - name: File an issue per flaky or failing test
+        if: always() && steps.hunt.outputs.flaky != '' && (steps.hunt.outputs.flaky != '0' || steps.hunt.outputs.failing != '0')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WIDTHS: ${{ steps.hunt.outputs.widths }}
+        run: |
+          set -euo pipefail
+          open="$(gh issue list --state open --limit 500 --json number,title)"
+          while IFS=$'\t' read -r kind name passes runs failed_widths excerpt; do
+            binary="${name%% *}"
+            test="${name#* }"
+            if [ "$kind" = "flaky" ]; then
+              title="tier3: flaky test — $binary $test"
+              verdict="passed $passes of $runs runs; failed at width(s) $failed_widths"
+            else
+              title="tier3: failing test — $binary $test"
+              verdict="failed in all $runs runs (widths $WIDTHS)"
+            fi
+            existing="$(jq -r --arg t "$title" '.[] | select(.title == $t) | .number' <<<"$open" | head -1)"
+            if [ -n "$existing" ]; then
+              echo "$title: already open as #$existing"
+              gh issue comment "$existing" --body "Again on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`: $verdict. Run: $RUN_URL"
+              continue
+            fi
+            body="$(cat <<EOF
+          The nightly flake hunter (\`tier3.yml\`) ran the \`ci\` nextest profile $runs times on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\` at \`--test-threads\` widths $WIDTHS, and \`$test\` in \`$binary\` $verdict.
+
+          \`\`\`
+          $(cat "$excerpt")
+          \`\`\`
+
+          - run: $RUN_URL (the \`flake-hunt\` artifact holds every run's nextest log and JUnit report)
+          - Reproduce: \`RUNS=1 WIDTHS="${failed_widths%% *}" ./scripts/flake-hunt.sh\`, or \`cargo nextest run --workspace --all-features --profile ci --test-threads ${failed_widths%% *} -E 'test(${test##*::})'\`.
+          - Quarantine, if the fix is not immediate: an override in \`.config/nextest.toml\` that names it, with this issue as the reason. \`retries = 0\` stays: a flake is a bug, and the override is a tourniquet, not a fix.
+
+            \`\`\`toml
+            [[profile.ci.overrides]]
+            filter  = 'binary(${binary##*::}) & test(${test##*::})'
+            # $title — see the issue; remove when closed.
+            retries = 2
+            \`\`\`
+
+          refs #204, #7
+          EOF
+          )"
+            url="$(gh issue create --title "$title" --label bug --label status:ready --body "$body")"
+            echo "$title: opened $url"
+          done < flakes.tsv
