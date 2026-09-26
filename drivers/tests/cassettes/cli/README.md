@@ -18,9 +18,33 @@ exactly `HOME`, `PATH` and `USER` — `USER` because the CLI's Keychain
 lookup on macOS keys on it, and without it a logged-in laptop reads as
 logged out. Runs 10 and 11 ran under a throwaway `HOME` with no login.
 Run 10 is `claude auth status`, not a print run: its one `stdout` record
-holds the pretty-printed document as one object, and `cut` says so. There
-is no `codex` transcript: #130's machine had no `codex` login, so #128
-begins by recording one on a machine that does.
+holds the pretty-printed document as one object, and `cut` says so.
+
+`codex-0.154.0/` is the [#128](https://github.com/tau-rs/tau/issues/128)
+gate, recorded on 2026-09-26 while signed in with a ChatGPT account:
+`0-login-status` is the auth probe, `1-hello` through `4-resume` are the
+runs #128's gating comment asked for, `5-model-rejected` is a backend 400
+(`-m gpt-5-codex`, which that account does not serve), and `6-stdin-held`
+holds stdin open for five seconds after spawn: nothing is printed until it
+closes, because `codex exec` with a piped stdin reads it to EOF as more
+prompt before starting; `7-resume-unknown` resumes a thread id the CLI
+has never seen (nothing on stdout, exit 1, the reason on stderr);
+`8-hello-ignore-user-config` is `1-hello` again under `--ignore-user-config`,
+the isolation flag the driver pins: the login is still read, and the turn's
+input fell from 71,179 tokens to 26,954 once the user's own configuration
+stayed out of the prompt. Three things the recording pinned that the gate
+did not know: the `brew` pin `0.46.0` refuses every model for a ChatGPT
+account (`gpt-5.5` answers "requires a newer version of Codex"), so the
+pin is the `0.154.0` Conductor ships; the strict structured-output
+validator behind `--output-schema` rejects `oneOf` and any object without
+`additionalProperties: false`, so these runs pass the projection at
+`fixtures/agent/envelope-schema.openai-strict.json`, not the committed
+schema; and with a schema in force every `agent_message` is a schema-shaped
+object, including the model's opening "I am about to..." one, so the
+envelope is the last `agent_message` of the turn, never the first. The
+prompt is `<contract>\n\nTask: ...` as one argv, so there is no `stdin`
+record; `stdin_closed` carries `at_ms` only when the runner delayed it.
+Where the CLI died by a signal, `exit.code` is the shell's `128 + n`.
 
 ## Format
 

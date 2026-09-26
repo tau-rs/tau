@@ -1,0 +1,3 @@
+{"tau":"header","v":1,"cli":"codex","version":"0.154.0","recorded_at":"2026-09-26","run":"7-resume-unknown","source":"#128 gate: resume an unknown thread id","argv":["codex","-a","never","exec","--json","--output-schema","drivers/tests/fixtures/agent/envelope-schema.openai-strict.json","--skip-git-repo-check","resume","00000000-0000-0000-0000-000000000000","Also write bye.txt containing bye"],"scrubbed":["argv --output-schema: the absolute path of the strict projection under the checkout, now repo-relative"]}
+{"tau":"stdin_closed"}
+{"tau":"exit","code":1,"elapsed_ms":206,"stderr":"Error: thread/resume: thread/resume failed: no rollout found for thread id 00000000-0000-0000-0000-000000000000 (code -32600)\n","files":{}}

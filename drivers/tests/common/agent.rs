@@ -272,6 +272,9 @@ pub(crate) const PROBES_VAR: &str = "TAU_TEST_PROBES";
 /// Where the stub writes the argv of the last run it handed to the fake,
 /// NUL-separated (the worker contract spans lines).
 pub(crate) const ARGV_VAR: &str = "TAU_TEST_ARGV";
+/// When set, a run prints this on stderr and exits 1 before the fake ever
+/// starts: `codex`'s refusal of an unknown thread id (#128 run 7).
+pub(crate) const REFUSE_VAR: &str = "TAU_TEST_REFUSE";
 
 /// A stand-in `claude` binary the driver can be *constructed* over.
 ///
@@ -368,6 +371,108 @@ impl ClaudeStub {
     }
 }
 
+/// A stand-in `codex` binary the driver can be *constructed* over.
+///
+/// `tau-fake-cli` replays its script whatever its argv, so it cannot answer
+/// `--version` or `login status` on its own. This `/bin/sh` wrapper answers
+/// both the way #128 recorded them at 0.154.0 — the version on stdout, the
+/// login line on **stderr** with nothing on stdout — and `exec`s the fake
+/// for everything else, recording the argv it was given. `TAU_TEST_LOGIN`
+/// names a marker file: present, the stub is logged in (exit 0); absent, it
+/// is logged out (exit 1, #130's `Error checking login status` line).
+pub(crate) struct CodexStub {
+    pub(crate) binary: PathBuf,
+    pub(crate) login: PathBuf,
+    pub(crate) probes: PathBuf,
+    pub(crate) argv: PathBuf,
+}
+
+impl CodexStub {
+    pub(crate) fn new(dir: &Path) -> Self {
+        let binary = dir.join("codex");
+        let body = format!(
+            "#!/bin/sh\n\
+             case \"$1\" in\n\
+               --version) echo \"codex-cli 0.154.0\"; exit 0 ;;\n\
+               login)\n\
+                 printf . >> \"${PROBES_VAR}\"\n\
+                 if [ -f \"${LOGIN_VAR}\" ]; then\n\
+                   echo 'Logged in using ChatGPT' >&2\n\
+                   exit 0\n\
+                 fi\n\
+                 echo 'Error checking login status: No such file or directory (os error 2)' >&2\n\
+                 exit 1 ;;\n\
+             esac\n\
+             printf '%s\\0' \"$@\" > \"${ARGV_VAR}\"\n\
+             if [ -n \"${REFUSE_VAR}\" ]; then printf '%s\\n' \"${REFUSE_VAR}\" >&2; exit 1; fi\n\
+             exec \"{fake}\" \"$@\"\n",
+            fake = FAKE_CLI,
+        );
+        std::fs::write(&binary, body).unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        Self {
+            binary,
+            login: dir.join("logged-in"),
+            probes: dir.join("probes"),
+            argv: dir.join("argv"),
+        }
+    }
+
+    /// Marks the stub logged in, or out.
+    pub(crate) fn set_logged_in(&self, logged_in: bool) {
+        if logged_in {
+            std::fs::write(&self.login, "").unwrap();
+        } else {
+            let _ = std::fs::remove_file(&self.login);
+        }
+    }
+
+    /// How many login probes the stub has answered.
+    pub(crate) fn probes(&self) -> usize {
+        std::fs::read_to_string(&self.probes)
+            .map(|s| s.len())
+            .unwrap_or(0)
+    }
+
+    /// The argv of the last run.
+    pub(crate) fn argv(&self) -> Vec<String> {
+        std::fs::read_to_string(&self.argv)
+            .map(|s| {
+                s.split('\0')
+                    .filter(|a| !a.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The ADR-0013 §9 registration over this stub, replaying `script`,
+    /// logged in, rooted at `root`, named `codex` with the `workspace-write`
+    /// sandbox #128 recorded under.
+    pub(crate) fn config(&self, script: &Path, root: impl Into<PathBuf>) -> AgentConfig {
+        self.set_logged_in(true);
+        let mut config = adr_config(root);
+        config.name = "codex".to_owned();
+        config.description = None;
+        config.tools = Vec::new();
+        config.task_cost_microusd = Some(2_000_000);
+        config.task_turns = None;
+        config.binary = self.binary.clone();
+        config.permission = Some("workspace-write".to_owned());
+        config.env = fake_env(script);
+        config
+            .env
+            .push((LOGIN_VAR.to_owned(), self.login.display().to_string()));
+        config
+            .env
+            .push((PROBES_VAR.to_owned(), self.probes.display().to_string()));
+        config
+            .env
+            .push((ARGV_VAR.to_owned(), self.argv.display().to_string()));
+        config
+    }
+}
+
 /// Polls until `path` exists, or about five seconds pass.
 ///
 /// For a script with a `touch` directive: the fake installs its signal
@@ -388,6 +493,11 @@ pub(crate) fn wait_for(path: &Path) {
 /// The `run` payload the tests send: the ADR-0013 §2 shape, task only.
 pub(crate) fn run_payload(task: &str) -> Vec<u8> {
     serde_json::to_vec(&json!({ "op": "run", "task": task })).unwrap()
+}
+
+/// The `resume` payload: a session and the amendment.
+pub(crate) fn resume_payload(session: &str, task: &str) -> Vec<u8> {
+    serde_json::to_vec(&json!({ "op": "resume", "session": session, "task": task })).unwrap()
 }
 
 /// A script that prints a scrubbed #130 transcript's stdout and exits as
@@ -415,4 +525,12 @@ pub(crate) fn synthetic_script(dir: &Path, name: &str, result: Value, code: i64)
             json!({ "exit": code }),
         ],
     )
+}
+
+/// A line the fake would print only after a minute: a CLI that is still
+/// working. A child with no stdin to wait on exits as soon as its timeline
+/// is spent, so a script that must still be running when a signal arrives
+/// keeps one of these pending.
+pub(crate) fn still_working() -> Value {
+    json!({ "line": { "type": "never.printed" }, "delay_ms": 60_000 })
 }
