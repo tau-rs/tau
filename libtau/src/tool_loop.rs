@@ -143,7 +143,7 @@ pub async fn tool_loop(
 }
 
 /// [`tool_loop`] with every model call made through
-/// [`infer_with`](crate::infer_with) under `policy`, waiting with `sleep`.
+/// [`infer_with`] under `policy`, waiting with `sleep`.
 ///
 /// A retried attempt leaves nothing in the transcript: only the reply that
 /// ends a model call is appended. A model `send` refused on budget, on the
