@@ -49,6 +49,15 @@ pub(crate) const REFUSE_VAR: &str = "TAU_TEST_REFUSE";
 /// stderr). Before handing a run to the fake it reads its stdin to end of
 /// file, as `codex exec` does before it starts (run 8): a driver that held
 /// the pipe open would hold the stub too.
+///
+/// The executable is one file for every test that asks for it, under
+/// `target/tmp`; only the marker, probe and argv files are the test's own.
+/// macOS checks an executable the first time it runs and remembers the
+/// verdict per file: 0.1 s idle, a second under load, and serialised
+/// across processes (#214, #224). Thirty-odd tests each writing their own
+/// copy paid that check thirty-odd times over, in a queue, and a test that
+/// spawns the stub three times sat at 4 s against the quick profile's 5 s
+/// ceiling under load (#237). One file pays it once.
 pub(crate) struct CodexStub {
     pub(crate) binary: PathBuf,
     pub(crate) login: PathBuf,
@@ -57,36 +66,11 @@ pub(crate) struct CodexStub {
 }
 
 impl CodexStub {
+    /// The stub over `tau-fake-cli`, with its marker, probe and argv files
+    /// under `dir`.
     pub(crate) fn new(dir: &Path) -> Self {
-        let binary = dir.join("codex");
-        let body = format!(
-            "#!/bin/sh\n\
-             case \"$1\" in\n\
-               --version) echo \"{VERSION}\"; exit 0 ;;\n\
-               login)\n\
-                 printf . >> \"${PROBES_VAR}\"\n\
-                 if [ -f \"${LOGIN_VAR}\" ]; then\n\
-                   echo '{MODE}' >&2\n\
-                   exit 0\n\
-                 fi\n\
-                 echo 'Not logged in. Run `codex login` first.' >&2\n\
-                 exit 1 ;;\n\
-             esac\n\
-             printf '%s\\0' \"$@\" > \"${ARGV_VAR}\"\n\
-             if [ -n \"${REFUSE_VAR}\" ]; then printf '%s\\n' \"${REFUSE_VAR}\" >&2; exit 1; fi\n\
-             cat > /dev/null\n\
-             prev=''\n\
-             for a in \"$@\"; do\n\
-               if [ \"$prev\" = --output-schema ]; then cp \"$a\" \"${ARGV_VAR}.schema\"; fi\n\
-               prev=\"$a\"\n\
-             done\n\
-             exec \"{fake}\" \"$@\"\n",
-            fake = agent::FAKE_CLI,
-        );
-        std::fs::write(&binary, body).unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
         Self {
-            binary,
+            binary: shared_stub(),
             login: dir.join("logged-in"),
             probes: dir.join("probes"),
             argv: dir.join("argv"),
@@ -154,6 +138,52 @@ impl CodexStub {
             .push((ARGV_VAR.to_owned(), self.argv.display().to_string()));
         config
     }
+}
+
+/// The one stub executable of this target directory, written on first use
+/// and reused by every later test and run: `target/tmp/codex-stub/codex`.
+///
+/// Reused only when its bytes are exactly the ones this build would write
+/// (the body names the fake by absolute path), so a stale file from an
+/// earlier checkout cannot answer for the current one. A replacement lands
+/// by rename, so a test spawning it meanwhile sees a whole file, old or
+/// new; two tests racing to write it write the same bytes.
+fn shared_stub() -> PathBuf {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("codex-stub");
+    let binary = dir.join("codex");
+    let body = format!(
+        "#!/bin/sh\n\
+         case \"$1\" in\n\
+           --version) echo \"{VERSION}\"; exit 0 ;;\n\
+           login)\n\
+             printf . >> \"${PROBES_VAR}\"\n\
+             if [ -f \"${LOGIN_VAR}\" ]; then\n\
+               echo '{MODE}' >&2\n\
+               exit 0\n\
+             fi\n\
+             echo 'Not logged in. Run `codex login` first.' >&2\n\
+             exit 1 ;;\n\
+         esac\n\
+         printf '%s\\0' \"$@\" > \"${ARGV_VAR}\"\n\
+         if [ -n \"${REFUSE_VAR}\" ]; then printf '%s\\n' \"${REFUSE_VAR}\" >&2; exit 1; fi\n\
+         cat > /dev/null\n\
+         prev=''\n\
+         for a in \"$@\"; do\n\
+           if [ \"$prev\" = --output-schema ]; then cp \"$a\" \"${ARGV_VAR}.schema\"; fi\n\
+           prev=\"$a\"\n\
+         done\n\
+         exec \"{fake}\" \"$@\"\n",
+        fake = agent::FAKE_CLI,
+    );
+    if std::fs::read_to_string(&binary).is_ok_and(|current| current == body) {
+        return binary;
+    }
+    std::fs::create_dir_all(&dir).unwrap();
+    let staged = dir.join(format!("codex.{}.tmp", std::process::id()));
+    std::fs::write(&staged, body).unwrap();
+    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::rename(&staged, &binary).unwrap();
+    binary
 }
 
 /// The committed transcript `run` of the pin, as a `tau-fake-cli` script
