@@ -8,7 +8,7 @@
 //! [`Kernel::tick`] — with a timer where [`VirtualClock::advance`] is.
 //!
 //! Units are whatever the clock source says they are. By convention a reading
-//! is `wall_ms` ([`DimKey::WallMs`](crate::abi::DimKey::WallMs)), which is
+//! is `wall_ms` ([`DimKey::WallMs`]), which is
 //! what [`WallClock`] publishes; a test may count in anything it likes.
 //!
 //! # Wall-exhaustion grace (ADR-0015)
