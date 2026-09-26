@@ -22,17 +22,20 @@ async fn a_shred_is_invisible_to_the_fold() {
     let untouched = finished(Box::new(Memory::new())).await;
     let shredded = finished(Box::new(Memory::new())).await;
     let result = digest(CHILD_RESULT);
-    assert_eq!(shredded.kernel.read(result).as_deref(), Some(CHILD_RESULT));
+    assert_eq!(
+        shredded.kernel().read(result).as_deref(),
+        Some(CHILD_RESULT)
+    );
 
-    shredded.kernel.shred(shredded.child).unwrap();
+    shredded.kernel().shred(shredded.child).unwrap();
 
     assert_eq!(
-        shredded.kernel.read(result),
+        shredded.kernel().read(result),
         None,
         "the child's result is gone"
     );
     assert_eq!(
-        shredded.kernel.read(digest(ROOT_MSG)).as_deref(),
+        shredded.kernel().read(digest(ROOT_MSG)).as_deref(),
         Some(ROOT_MSG),
         "the root's request is not"
     );
@@ -41,12 +44,15 @@ async fn a_shred_is_invisible_to_the_fold() {
         untouched.sink.contents(),
         "the logs are the same bytes"
     );
-    assert_eq!(shredded.kernel.state_hash(), untouched.kernel.state_hash());
+    assert_eq!(
+        shredded.kernel().state_hash(),
+        untouched.kernel().state_hash()
+    );
 
     let log = shredded.write_log("shred-invisible-to-the-fold.log");
     assert_eq!(
         replay_hash(&log),
-        untouched.kernel.state_hash().to_string(),
+        untouched.kernel().state_hash().to_string(),
         "`tau replay` over the shredded run's log prints the untouched run's hash"
     );
 }
@@ -55,7 +61,8 @@ async fn a_shred_is_invisible_to_the_fold() {
 async fn tau_shred_drops_the_subtrees_keys_and_the_fold_does_not_see_it() {
     let untouched = finished(Box::new(Memory::new())).await;
     let dir = tempfile::tempdir().unwrap();
-    let run = finished(Box::new(Disk::open(dir.path()).unwrap())).await;
+    let mut run = finished(Box::new(Disk::open(dir.path()).unwrap())).await;
+    run.release().await;
     let log = run.write_log("tau-shred-drops-keys.log");
     let before = fs::read(&log).unwrap();
     let child = run.child.to_string();
@@ -76,9 +83,10 @@ async fn tau_shred_drops_the_subtrees_keys_and_the_fold_does_not_see_it() {
     assert_eq!(fs::read(&log).unwrap(), before, "the log is untouched");
     assert_eq!(
         replay_hash(&log),
-        untouched.kernel.state_hash().to_string(),
+        untouched.kernel().state_hash().to_string(),
         "the fold does not see the shred"
     );
+    drop(disk);
 
     // A second shred is a no-op: same exit, same store.
     let again = tau(&["shred", path(&log), path(dir.path()), &child]);
@@ -91,7 +99,8 @@ async fn tau_shred_drops_the_subtrees_keys_and_the_fold_does_not_see_it() {
 #[tokio::test]
 async fn tau_shred_of_the_root_takes_the_whole_tree() {
     let dir = tempfile::tempdir().unwrap();
-    let run = finished(Box::new(Disk::open(dir.path()).unwrap())).await;
+    let mut run = finished(Box::new(Disk::open(dir.path()).unwrap())).await;
+    run.release().await;
     let log = run.write_log("tau-shred-root.log");
 
     let out = tau(&["shred", path(&log), path(dir.path()), &run.root.to_string()]);
@@ -102,22 +111,63 @@ async fn tau_shred_of_the_root_takes_the_whole_tree() {
     for bytes in [CHILD_RESULT, ROOT_MSG, ROOT_RESULT] {
         assert_eq!(disk.status(&digest(bytes)), Status::Shredded);
     }
+    drop(disk);
     // The root's id is accepted bare as well as as the kernel prints it.
     let bare = run.root.get().to_string();
     let again = tau(&["shred", path(&log), path(dir.path()), &bare]);
     assert!(again.status.success(), "{}", stderr(&again));
 }
 
+/// A running kernel holds its store, and the lock is consulted before the
+/// log: the log path here does not exist, and the verb never notices.
+#[tokio::test]
+async fn tau_shred_refuses_a_store_a_running_kernel_holds_before_reading_the_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut run = live(Box::new(Disk::open(dir.path()).unwrap())).await;
+    let child = run.child.to_string();
+    let child_msg = digest(CHILD_MSG);
+    let no_such_log = dir.path().join("no-such.log");
+
+    let out = tau(&["shred", path(&no_such_log), path(dir.path()), &child]);
+    assert_eq!(out.status.code(), Some(11), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains(&format!("store held: {}", dir.path().display())),
+        "names the directory: {}",
+        stderr(&out)
+    );
+    assert_eq!(
+        run.kernel().read(child_msg).as_deref(),
+        Some(CHILD_MSG),
+        "nothing was shredded"
+    );
+    assert!(
+        !dir.path().join("shredded").exists(),
+        "no tombstone was written"
+    );
+
+    // Once the kernel is gone the same command reaches the log, and it is
+    // the log's turn to refuse.
+    run.finish().await;
+    run.release().await;
+    let out = tau(&["shred", path(&no_such_log), path(dir.path()), &child]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+}
+
+/// The fold's own refusal, reached once nobody holds the store: the log as
+/// it stood with the child parked, and a kernel that is gone — which is
+/// what a kernel that crashed mid-run leaves behind.
 #[tokio::test]
 async fn tau_shred_refuses_a_live_subtree() {
     let dir = tempfile::tempdir().unwrap();
-    let run = live(Box::new(Disk::open(dir.path()).unwrap())).await;
+    let mut run = live(Box::new(Disk::open(dir.path()).unwrap())).await;
     let child = run.child.to_string();
     let child_msg = digest(CHILD_MSG);
-    assert_eq!(run.kernel.read(child_msg).as_deref(), Some(CHILD_MSG));
+    assert_eq!(run.kernel().read(child_msg).as_deref(), Some(CHILD_MSG));
 
     // The log as it stands with the child parked: the fold sees it live.
     let log = run.write_log("tau-shred-live.log");
+    run.finish().await;
+    run.release().await;
     let out = tau(&["shred", path(&log), path(dir.path()), &child]);
     assert_eq!(out.status.code(), Some(9), "{}", stderr(&out));
     assert!(
@@ -144,7 +194,6 @@ async fn tau_shred_refuses_a_live_subtree() {
         "no tombstone was written"
     );
 
-    run.finish().await;
     let log = run.write_log("tau-shred-live-then-finished.log");
     let out = tau(&["shred", path(&log), path(dir.path()), &child]);
     assert!(out.status.success(), "{}", stderr(&out));
@@ -157,7 +206,8 @@ async fn tau_shred_refuses_a_live_subtree() {
 #[tokio::test]
 async fn tau_shred_of_an_agent_the_log_does_not_have_is_usage() {
     let dir = tempfile::tempdir().unwrap();
-    let run = finished(Box::new(Disk::open(dir.path()).unwrap())).await;
+    let mut run = finished(Box::new(Disk::open(dir.path()).unwrap())).await;
+    run.release().await;
     let log = run.write_log("tau-shred-unknown-agent.log");
 
     let out = tau(&["shred", path(&log), path(dir.path()), "agent:999"]);
@@ -233,7 +283,8 @@ async fn tau_shred_that_cannot_drop_a_key_is_not_reported_as_erasure() {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = tempfile::tempdir().unwrap();
-    let run = finished(Box::new(Disk::open(dir.path()).unwrap())).await;
+    let mut run = finished(Box::new(Disk::open(dir.path()).unwrap())).await;
+    run.release().await;
     let log = run.write_log("tau-shred-faulted.log");
     let keys = dir.path().join("keys");
     fs::set_permissions(&keys, fs::Permissions::from_mode(0o555)).unwrap();

@@ -34,10 +34,23 @@
 //! wrapping them under an operator key is the harness's next step, and a
 //! backup policy must exclude `keys/`.
 //!
-//! One writer per store: `put`'s idempotence is per process.
+//! One writer per store. `put`'s idempotence is per process, and two
+//! writers would race on the same temporary names in `objects/` and, worse,
+//! on an owner's first key: each would generate its own, one would win the
+//! rename, and the other's copies would be sealed under a key nobody holds.
+//! So a [`Disk`] holds an exclusive advisory lock on `STORE` for as long as
+//! it lives, taken with [`File::try_lock`] on open. A second [`Disk`] on the
+//! same directory — from another process, or from this one — is refused
+//! with [`OpenError::Held`] naming the path. The lock is the kernel's
+//! bookkeeping, not a file: it vanishes with the process that held it,
+//! so a writer that crashes leaves nothing to recover, and nothing else
+//! appears in the layout above. Every `Disk` is a writer, since every one
+//! implements the port's `put` and `shred`, so a read-only opener (`tau
+//! blobs`) contends like any other; that is the honest consequence of not
+//! having a read-only type.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -95,6 +108,11 @@ pub enum OpenError {
         /// Its value, as written.
         value: String,
     },
+    /// Another [`Disk`] holds this store — in another process, or in this
+    /// one — and a store has one writer. The lock goes when that `Disk`
+    /// is dropped or its process ends.
+    #[error("{0}: store held by another Disk (STORE is locked); one writer per store")]
+    Held(PathBuf),
 }
 
 /// What a reopened store can say about a reference, for tooling and the
@@ -124,6 +142,11 @@ pub struct Disk {
     /// so the kernel — which asks through [`Blobs::fault`] after every
     /// write — can tell a full disk from an erasure.
     fault: Option<String>,
+    /// `STORE`, open and exclusively locked for as long as this `Disk`
+    /// lives: the one-writer rule (ADR-0012 §4). Never read through; it
+    /// is here to be dropped.
+    #[allow(dead_code, reason = "held for its lock, released on drop")]
+    held: File,
 }
 
 impl Disk {
@@ -134,6 +157,11 @@ impl Disk {
     /// not know, is refused naming the field and the value. A path that
     /// does not exist, or an empty directory, becomes a new store. A
     /// non-empty directory with no header is refused.
+    ///
+    /// Then the store is claimed: an exclusive advisory lock on `STORE`,
+    /// held until this `Disk` is dropped. A store another `Disk` holds is
+    /// refused with [`OpenError::Held`], whether that `Disk` is in another
+    /// process or this one; the lock is per open file, not per process.
     ///
     /// Nothing else is read eagerly: keys are read on first use, objects
     /// on `get`.
@@ -154,10 +182,12 @@ impl Disk {
                 })
             }
         }
+        let held = claim(&root, &header)?;
         Ok(Self {
             root,
             keys: BTreeMap::new(),
             fault: None,
+            held,
         })
     }
 
@@ -165,6 +195,11 @@ impl Disk {
     /// header is refused, never initialised. For tooling that names a store
     /// from outside the kernel (`tau blobs`, `tau shred`), where a mistyped
     /// path must fail rather than create an empty store to operate on.
+    ///
+    /// Holds the store like [`Disk::open`] does: this is the constructor
+    /// behind `tau shred`, a writer, and a `Disk` cannot promise not to
+    /// write. So it is refused beside a running kernel, and so is `tau
+    /// blobs`, which opens through it too.
     ///
     /// # Errors
     ///
@@ -415,6 +450,25 @@ fn check_header(bytes: &[u8]) -> Result<(), OpenError> {
     check("v", field("v").as_u64() == Some(VERSION))?;
     check("digest", field("digest").as_str() == Some(DIGEST))?;
     check("aead", field("aead").as_str() == Some(AEAD))
+}
+
+/// Claims the store: `STORE` open and exclusively locked, or
+/// [`OpenError::Held`] if some other `Disk` got there first. The lock lives
+/// as long as the returned file does. Advisory — nothing stops `rm` — and
+/// on the inode, so `initialise`'s rename must have happened before this.
+/// A filesystem that cannot lock is an [`OpenError::Io`]: a store whose
+/// one-writer rule cannot be enforced is not opened on a guess.
+fn claim(root: &Path, header: &Path) -> Result<File, OpenError> {
+    let io = |source| OpenError::Io {
+        path: header.to_path_buf(),
+        source,
+    };
+    let file = File::open(header).map_err(io)?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(TryLockError::WouldBlock) => Err(OpenError::Held(root.to_path_buf())),
+        Err(TryLockError::Error(source)) => Err(io(source)),
+    }
 }
 
 fn initialise(root: &Path) -> Result<(), OpenError> {

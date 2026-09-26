@@ -51,7 +51,8 @@ pub(crate) fn tokio_spawner(fut: BoxFuture<()>) -> AbortHandle {
 
 /// A run of the scenario: the kernel, its two agents, and the log sink.
 pub(crate) struct Run {
-    pub(crate) kernel: Arc<Kernel>,
+    /// `None` once [`Run::release`] has dropped it.
+    kernel: Option<Arc<Kernel>>,
     pub(crate) root: AgentId,
     pub(crate) child: AgentId,
     pub(crate) sink: SharedBuf,
@@ -61,6 +62,36 @@ impl Run {
     /// The log as written so far, as a file under cargo's temp dir.
     pub(crate) fn write_log(&self, name: &str) -> PathBuf {
         scratch(name, &self.sink.contents())
+    }
+
+    pub(crate) fn kernel(&self) -> &Arc<Kernel> {
+        self.kernel.as_ref().expect("the kernel was released")
+    }
+
+    /// Drops the kernel, and with it the store it was booted on: a `Disk`
+    /// holds its directory for as long as it lives (ADR-0012 §4 "One
+    /// writer"), so a `tau` verb can only open the store once the kernel
+    /// that wrote it is gone, as it is once a real harness has exited.
+    /// The log sink and the ids stay, so the run can still be read.
+    ///
+    /// The driver loops each hold the kernel until they see `shutdown`,
+    /// which on a current-thread runtime is on their next poll: yield until
+    /// they have gone, bounded, so a holder that never lets go is a failure
+    /// here and not a mysterious exit 11 later.
+    pub(crate) async fn release(&mut self) {
+        let kernel = self.kernel.take().expect("released once");
+        for _ in 0..64 {
+            if Arc::strong_count(&kernel) == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            Arc::strong_count(&kernel),
+            1,
+            "something still holds the kernel, so the store is not released"
+        );
+        drop(kernel);
     }
 }
 
@@ -123,7 +154,7 @@ pub(crate) async fn finished(blobs: Box<dyn Blobs>) -> Run {
     kernel.shutdown();
     let child = child_of(&kernel, root);
     Run {
-        kernel,
+        kernel: Some(kernel),
         root,
         child,
         sink,
@@ -169,7 +200,7 @@ pub(crate) async fn live(blobs: Box<dyn Blobs>) -> Run {
     parked.notified().await;
     let child = child_of(&kernel, root);
     Run {
-        kernel,
+        kernel: Some(kernel),
         root,
         child,
         sink,
@@ -179,11 +210,11 @@ pub(crate) async fn live(blobs: Box<dyn Blobs>) -> Run {
 impl Run {
     /// Cancels the parked child of [`live`], drains, and shuts down.
     pub(crate) async fn finish(&self) {
-        self.kernel
+        self.kernel()
             .cancel_from_harness(self.child, &tau_kernel::syscall::CancelMode::immediate())
             .unwrap();
-        self.kernel.drained().await.unwrap();
-        self.kernel.shutdown();
+        self.kernel().drained().await.unwrap();
+        self.kernel().shutdown();
     }
 }
 

@@ -187,6 +187,8 @@ fn a_copy_does_not_open_under_another_key_reference_or_owner() {
     )
     .unwrap();
     fs::write(key(dir.path(), owner(1)), OTHER_KEY).unwrap();
+    // One writer per store: the reopen needs the first handle gone.
+    drop(disk);
     let reopened = Disk::open(dir.path()).unwrap();
     assert_eq!(reopened.get(&a), None);
     fs::write(key(dir.path(), owner(1)), KEY).unwrap();

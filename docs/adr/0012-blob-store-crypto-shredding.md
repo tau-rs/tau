@@ -341,9 +341,24 @@ is in `shredded`, and no copy opens. `Absent`: no object and no tombstone
 names an owner of it. This is for `tau` tooling and for the harness; agents
 see `Option`.
 
-**One writer.** A store directory belongs to one running kernel. A `LOCK`
-file with the writer's pid is the follow-on's; the ADR requires only that
-two kernels never share a store, because `put`'s idempotence is per process.
+**One writer.** A store directory belongs to one running kernel, because
+`put`'s idempotence is per process: two writers would race on the same
+temporary names under `objects/` and, worse, on an owner's first key — each
+generating its own, one winning the rename, the other sealing copies under a
+key nobody holds. Enforced (amendment 2026-09-26,
+[#145](https://github.com/tau-rs/tau/issues/145)) by an exclusive advisory
+lock on `STORE`, taken with the standard library's `File::try_lock` when a
+`Disk` opens and held until it is dropped. A second `Disk` on the directory
+is refused with `OpenError::Held` naming the path, from another process or
+from the same one: the lock is per open file description, not per process.
+Not a `LOCK` file with a pid, which the original text named: a pid goes
+stale on a crash and needs its own recovery, while a lock the kernel holds
+on the writer's behalf vanishes with the process, so a crashed writer
+leaves nothing to detect and the layout above gains no file. Every `Disk`
+is a writer — every one implements `put` and `shred` — so `tau blobs`
+contends like `tau shred` does and is refused beside a running kernel; a
+read-only view that need not is a follow-on, if an operator ever needs to
+inspect a store while its kernel runs.
 
 ### 5. What replay and snapshots need from the store
 
@@ -430,6 +445,16 @@ contract with two implementations, and the same suite proves both:
   reported as a failure, not as erasure. Skipped, not faked, where the
   permission bits do not bite (root, or a filesystem that ignores them);
   the tests probe rather than guess.
+- **`a_second_disk_on_one_directory_is_refused_until_the_first_is_dropped`**,
+  **`a_store_held_by_another_process_is_refused_until_it_lets_go`** and
+  **`a_writer_that_dies_holding_the_store_does_not_brick_it`** (`Disk`,
+  amendment 2026-09-26): the one-writer rule as a test, in one process and
+  across two (the test binary re-run as the holder), the error naming the
+  directory and the layout gaining no file; and a holder killed mid-hold
+  leaving a store that opens and writes as if closed properly. On the
+  operator's side, `tau shred` and `tau blobs` against a store a kernel
+  still holds exit 11 naming the directory, `shred` before it has read the
+  log (`cli/tests/shred.rs`, `cli/tests/blobs.rs`).
 - **Nothing re-pins.** No fixture, no sidecar, no `PINNED`, no `FOLD`
   moves; `just abi` shows no diff. If any does, the lane has touched
   something this ADR said it would not.
@@ -570,5 +595,28 @@ crate says what it is.
   harness free to ask — was rejected because a harness that merely *could*
   ask will not, and the failure it would miss is silent data loss wearing
   the costume of a legitimate erasure.
+- **2026-09-26** — One writer, enforced
+  ([#145](https://github.com/tau-rs/tau/issues/145)). §4 required that two
+  kernels never share a store and left the mechanism — a `LOCK` file with
+  the writer's pid — to a follow-on, gated on a harness that opens a store
+  from two places. `tau shred` and `tau blobs` (#199) are that harness. The
+  mechanism chosen is an exclusive advisory lock on `STORE` itself,
+  `File::try_lock` from the standard library, held by every `Disk` for its
+  lifetime and released by drop or by the process ending; `Disk::open` and
+  `open_existing` on a held store return the new `OpenError::Held` (the
+  enum is `#[non_exhaustive]`), and both verbs surface it as exit 11 naming
+  the directory, `shred` before it reads the log because the lock is
+  current and a running kernel's log on disk is not. Rejected: the pid
+  file, because it goes stale on a crash and needs recovery the kernel
+  would have to get right; a separate `LOCK` file under `flock`, because
+  it adds a file to the layout for nothing the header cannot do; a shared
+  lock for `tau blobs`, because a shared lock is still refused beside an
+  exclusive one and so buys nothing over none, and none would let a type
+  that can write open a store it must not write to. Two honest
+  consequences: `tau blobs` cannot inspect a store while its kernel runs
+  (a read-only view is a follow-on), and two `Disk`s in one process on
+  one directory — which nothing does on purpose — now refuse where they
+  used to race. Nothing enters `kernel/src/abi/`: no `ABI` bump, no
+  snapshot, sidecar, `PINNED` or `FOLD` moves. The tests are listed in §6.
 
 [`BlobRef`]: ../../kernel/src/abi/msg.rs
