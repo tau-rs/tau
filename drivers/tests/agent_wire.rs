@@ -147,17 +147,21 @@ fn describe_is_the_adr_projection() {
     );
     assert_eq!(wire::schema(Caps::ALL), fixture["input_schema"]);
 
-    // The ADR's shape: one branch per op, each naming its `op` as a const,
-    // `v` nowhere, `additionalProperties` false.
+    // The ADR's shape: one branch per op, each naming its `op` as a const
+    // and closing its own `properties`, `v` nowhere. Nothing closes the
+    // root: an `additionalProperties: false` there, beside a `oneOf`, has
+    // no `properties` of its own and refuses every key (#193).
     let schema = &fixture["input_schema"];
     assert_eq!(schema["type"], json!("object"));
-    assert_eq!(schema["additionalProperties"], json!(false));
+    assert!(schema.get("additionalProperties").is_none());
     let branches = schema["oneOf"].as_array().unwrap();
     assert_eq!(branches.len(), 2);
     assert_eq!(branches[0]["properties"]["op"]["const"], json!("run"));
     assert_eq!(branches[0]["required"], json!(["op", "task"]));
+    assert_eq!(branches[0]["additionalProperties"], json!(false));
     assert_eq!(branches[1]["properties"]["op"]["const"], json!("resume"));
     assert_eq!(branches[1]["required"], json!(["op", "session", "task"]));
+    assert_eq!(branches[1]["additionalProperties"], json!(false));
     assert!(
         !serde_json::to_string(schema).unwrap().contains("\"v\""),
         "a model never sets the wire version"
@@ -184,6 +188,11 @@ fn a_cli_that_would_refuse_a_field_never_shows_it() {
     assert!(
         schema.get("oneOf").is_none(),
         "one op left, one flat object"
+    );
+    assert_eq!(
+        schema["additionalProperties"],
+        json!(false),
+        "the one branch's closure lands on the root, beside its `properties`"
     );
     let properties = schema["properties"].as_object().unwrap();
     assert!(properties.contains_key("task") && properties.contains_key("workspace"));

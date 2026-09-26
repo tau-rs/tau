@@ -934,6 +934,11 @@ fn describe_omits_tools_and_budget_and_offers_resume() {
     assert!(run.get("budget").is_none());
     assert!(run.get("task").is_some() && run.get("workspace").is_some());
     assert_eq!(branches[1]["properties"]["op"]["const"], "resume");
-    assert_eq!(input["additionalProperties"], false);
+    // #193: each branch closes itself; a root `additionalProperties`
+    // beside a `oneOf` would refuse every key.
+    assert!(input.get("additionalProperties").is_none());
+    for branch in branches {
+        assert_eq!(branch["additionalProperties"], false);
+    }
     assert_eq!(driver.ceiling(), driver.config().ceiling());
 }
