@@ -262,7 +262,7 @@ pub(crate) fn script_from_transcript(records: &[Value]) -> (Vec<Value>, Option<S
 pub(crate) const INTERRUPT: &str =
     "{\"type\":\"control_request\",\"request_id\":\"tau-cancel-1\",\"request\":{\"subtype\":\"interrupt\"}}\n";
 
-// --- a CLI the driver can construct -------------------------------------------
+// --- a `claude` the driver can construct ------------------------------------
 
 /// The environment variable the stub reads its login marker from: the file
 /// exists, the stub is "logged in".
@@ -275,6 +275,100 @@ pub(crate) const ARGV_VAR: &str = "TAU_TEST_ARGV";
 /// When set, a run prints this on stderr and exits 1 before the fake ever
 /// starts: `codex`'s refusal of an unknown thread id (#128 run 7).
 pub(crate) const REFUSE_VAR: &str = "TAU_TEST_REFUSE";
+
+/// A stand-in `claude` binary the driver can be *constructed* over.
+///
+/// `tau-fake-cli` replays its script whatever its argv, so it cannot answer
+/// `--version` or `auth status` on its own. This `/bin/sh` wrapper answers
+/// both the way #130 recorded them and `exec`s the fake for everything
+/// else, recording the argv it was given. `TAU_TEST_LOGIN` names a marker
+/// file: present, the stub is logged in (exit 0, the JSON #130 saw, minus
+/// the email); absent, it is logged out (exit 1, a line on stderr).
+pub(crate) struct ClaudeStub {
+    pub(crate) binary: PathBuf,
+    pub(crate) login: PathBuf,
+    pub(crate) probes: PathBuf,
+    pub(crate) argv: PathBuf,
+}
+
+impl ClaudeStub {
+    pub(crate) fn new(dir: &Path) -> Self {
+        let binary = dir.join("claude");
+        let body = format!(
+            "#!/bin/sh\n\
+             case \"$1\" in\n\
+               --version) echo \"2.1.272 (Claude Code)\"; exit 0 ;;\n\
+               auth)\n\
+                 printf . >> \"${PROBES_VAR}\"\n\
+                 if [ -f \"${LOGIN_VAR}\" ]; then\n\
+                   echo '{{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\"}}'\n\
+                   exit 0\n\
+                 fi\n\
+                 echo 'Not logged in. Run `claude auth login` first.' >&2\n\
+                 exit 1 ;;\n\
+             esac\n\
+             printf '%s\\0' \"$@\" > \"${ARGV_VAR}\"\n\
+             exec \"{fake}\" \"$@\"\n",
+            fake = FAKE_CLI,
+        );
+        std::fs::write(&binary, body).unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        Self {
+            binary,
+            login: dir.join("logged-in"),
+            probes: dir.join("probes"),
+            argv: dir.join("argv"),
+        }
+    }
+
+    /// Marks the stub logged in, or out.
+    pub(crate) fn set_logged_in(&self, logged_in: bool) {
+        if logged_in {
+            std::fs::write(&self.login, "").unwrap();
+        } else {
+            let _ = std::fs::remove_file(&self.login);
+        }
+    }
+
+    /// How many login probes the stub has answered.
+    pub(crate) fn probes(&self) -> usize {
+        std::fs::read_to_string(&self.probes)
+            .map(|s| s.len())
+            .unwrap_or(0)
+    }
+
+    /// The argv of the last run.
+    pub(crate) fn argv(&self) -> Vec<String> {
+        std::fs::read_to_string(&self.argv)
+            .map(|s| {
+                s.split('\0')
+                    .filter(|a| !a.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The ADR-0013 §9 registration over this stub, replaying `script`,
+    /// logged in, rooted at `root`.
+    pub(crate) fn config(&self, script: &Path, root: impl Into<PathBuf>) -> AgentConfig {
+        self.set_logged_in(true);
+        let mut config = adr_config(root);
+        config.binary = self.binary.clone();
+        config.permission = Some("acceptEdits".to_owned());
+        config.env = fake_env(script);
+        config
+            .env
+            .push((LOGIN_VAR.to_owned(), self.login.display().to_string()));
+        config
+            .env
+            .push((PROBES_VAR.to_owned(), self.probes.display().to_string()));
+        config
+            .env
+            .push((ARGV_VAR.to_owned(), self.argv.display().to_string()));
+        config
+    }
+}
 
 /// A stand-in `codex` binary the driver can be *constructed* over.
 ///
@@ -405,11 +499,31 @@ pub(crate) fn resume_payload(session: &str, task: &str) -> Vec<u8> {
     serde_json::to_vec(&json!({ "op": "resume", "session": session, "task": task })).unwrap()
 }
 
-/// A script that prints a scrubbed transcript's stdout and exits as it did.
+/// A script that prints a scrubbed #130 transcript's stdout and exits as
+/// it did — `1-hello` is the happy path, `6-max-turns-1` the turn bound.
 pub(crate) fn replay_script(dir: &Path, pin: &str, run: &str) -> PathBuf {
     let records = transcript(pin, run);
     let (directives, _) = script_from_transcript(&records);
     script(dir, run, &directives)
+}
+
+/// A one-run script: `init` with `session_id`, then this `result` line,
+/// then `exit` with `code`. For the rows no #130 transcript reaches.
+pub(crate) fn synthetic_script(dir: &Path, name: &str, result: Value, code: i64) -> PathBuf {
+    script(
+        dir,
+        name,
+        &[
+            json!({ "line": {
+                "type": "system", "subtype": "init",
+                "session_id": "11111111-2222-3333-4444-555555555555",
+                "model": "claude-opus-5[1m]", "apiKeySource": "none",
+                "permissionMode": "acceptEdits",
+            }}),
+            json!({ "line": result }),
+            json!({ "exit": code }),
+        ],
+    )
 }
 
 /// A line the fake would print only after a minute: a CLI that is still

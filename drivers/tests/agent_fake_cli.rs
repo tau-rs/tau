@@ -399,3 +399,37 @@ fn the_config_helper_points_the_registration_at_the_fake() {
         .any(|(k, v)| k == agent::SCRIPT_VAR && Path::new(v) == path));
     assert!(Path::new(agent::FAKE_CLI).is_file());
 }
+
+#[test]
+fn a_touch_directive_marks_readiness_after_the_handlers_are_installed() {
+    let dir = agent::Temp::new("touch");
+    let ready = dir.path().join("ready");
+    // The marker lands after the handlers are installed, so a signal sent
+    // once it exists is caught, however slowly the binary started.
+    let path = agent::script(
+        dir.path(),
+        "touch",
+        &[
+            json!({ "touch": ready }),
+            json!({ "on": { "signal": "SIGTERM" }, "lines": [{ "type": "caught" }], "exit": 3 }),
+        ],
+    );
+    let (mut child, mut stdout) = spawn(&path, Stdio::piped());
+    let stdin = child.stdin.take().unwrap();
+    agent::wait_for(&ready);
+    signal(&child, Signal::SIGTERM);
+    assert_eq!(rest(&mut stdout), vec![json!({ "type": "caught" })]);
+    drop(stdin);
+    assert_eq!(child.wait().unwrap().code(), Some(3));
+
+    let bad = dir.path().join("bad.jsonl");
+    std::fs::write(&bad, "{\"touch\": 7}\n").unwrap();
+    let malformed = Command::new(agent::FAKE_CLI)
+        .env_clear()
+        .env(agent::SCRIPT_VAR, &bad)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(malformed.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&malformed.stderr).contains("touch must be a string"));
+}

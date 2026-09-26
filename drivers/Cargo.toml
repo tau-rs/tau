@@ -25,7 +25,7 @@ path              = "src/bin/tau-fake-cli.rs"
 required-features = ["agent"]
 
 [features]
-default   = ["anthropic", "openai", "sandbox", "agent", "agent-codex"]
+default   = ["anthropic", "openai", "sandbox", "agent", "agent-claude", "agent-codex"]
 # The Anthropic Messages API model driver (ADR-0006 §6, Anthropic column).
 anthropic = ["dep:reqwest", "dep:tokio"]
 # The OpenAI-compatible chat-completions driver (ADR-0006 §6, right-hand
@@ -43,6 +43,10 @@ sandbox   = ["dep:tokio", "dep:nix", "dep:signal-hook", "dep:schemars"]
 # `signal-hook` is for `tau-fake-cli` alone: the driver sends signals, it
 # never receives them.
 agent     = ["dep:nix", "dep:schemars", "dep:signal-hook"]
+# The `claude` adapter (ADR-0013 §7, the `claude` column): Claude Code in
+# print mode behind `send`. `tokio` for the one-shot channel between the run
+# thread and the kernel's future, `sync` only; still no `reqwest`.
+agent-claude = ["agent", "dep:tokio"]
 # The `codex` adapter (ADR-0013 §7, the `codex` column): `codex exec --json
 # --output-schema` behind one `send`. `tokio` for the one `oneshot` that
 # carries a run thread's reply into the kernel's future; still no `reqwest`.
