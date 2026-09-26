@@ -1,0 +1,5 @@
+---
+source: kernel/tests/wall_grace.rs
+expression: state.hash().to_string()
+---
+f1a6526d27eacf489a70ba6600ca223f8a8397d788cf9a6354dc6f9267e76a7b

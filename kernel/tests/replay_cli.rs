@@ -122,7 +122,11 @@ fn every_corpus_log_folds_to_its_sidecar() {
 #[test]
 fn every_fixture_folds_to_what_the_reducer_folds_in_process() {
     let logs = logs_in(&fixtures());
-    assert_eq!(logs.len(), 5, "the five milestone fixtures");
+    assert_eq!(
+        logs.len(),
+        6,
+        "the five milestone fixtures and the ADR-0015 wall-grace one"
+    );
     for log in logs {
         let bytes = fs::read(&log).unwrap();
         let in_process = fold(Log::read_from(bytes.as_slice()).unwrap().entries())
