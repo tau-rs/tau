@@ -85,7 +85,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: fuzz -> target
-      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+      - uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
         with:
           tool: cargo-fuzz
 
@@ -95,7 +95,7 @@ jobs:
       # or an entry evicted after a week unused, starts from the seeds.
       - name: Restore the corpus
         id: restore
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
@@ -125,7 +125,7 @@ jobs:
       # the corpus the fix's run should start from.
       - name: Save the corpus
         if: always() && steps.fuzz.outcome != 'skipped'
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
